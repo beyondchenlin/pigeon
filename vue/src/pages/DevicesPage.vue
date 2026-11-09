@@ -166,6 +166,8 @@ function normalizeStatus(state: string, _locked: boolean): DeviceStatus {
   return "offline";
 }
 
+function openControl(id: string) { window.location.assign(`/d/${encodeURIComponent(id)}/`); }
+
 function mapDeviceFromApi(device: DeviceApiItem, groupId: string | null): DeviceRecord {
   const now = Math.floor(Date.now() / 1000);
   const status = normalizeStatus(String(device.state || ""), Boolean(device.locked));
@@ -1631,7 +1633,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
                     <span class="min-w-0 flex-1 truncate text-xs font-semibold" :title="device.remark || device.model">{{ device.remark || (device.model !== '-' ? device.model : device.id) }}</span>
                     <span class="shrink-0 text-[11px]" :class="statusTextColor(device.status)">● {{ getStatusLabel(device.status) }}</span>
                   </div>
-                  <button type="button" class="block aspect-[9/18] w-full focus-visible:outline-2 focus-visible:outline-orange-500" :aria-label="`远控 ${device.id}`" :disabled="device.status !== 'online'" @click="router.push(`/control/${device.id}`)">
+                  <button type="button" class="block aspect-[9/18] w-full focus-visible:outline-2 focus-visible:outline-orange-500" :aria-label="`远控 ${device.id}`" :disabled="device.status !== 'online'" @click="openControl(device.id)">
                     <LiveDevicePreview :device-id="device.id" :online="device.status === 'online'" :pending="device.status === 'pending'" :paused="previewsPaused" />
                   </button>
                   <div class="space-y-2 px-3 py-2.5">
@@ -1639,7 +1641,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
                     <div class="flex items-center justify-between gap-1"><span class="text-xs text-muted-foreground">{{ androidVersionFromSdk(device.sdk) }}</span><DeviceBattery :device-id="device.id" :online="device.status === 'online'" /></div>
                     <div class="flex gap-2 border-t border-border pt-2">
                       <Button v-if="device.status === 'pending'" size="sm" class="h-7 flex-1 text-xs" @click="void onOpenDevice(device)">接入配置</Button>
-                      <Button v-else size="sm" class="h-7 flex-1 bg-orange-500 text-xs text-white hover:bg-orange-600" :disabled="device.status !== 'online'" @click="router.push(`/control/${device.id}`)">打开远控</Button>
+                      <Button v-else size="sm" class="h-7 flex-1 bg-orange-500 text-xs text-white hover:bg-orange-600" :disabled="device.status !== 'online'" @click="openControl(device.id)">打开远控</Button>
                       <Button size="sm" variant="outline" class="h-7 flex-1 text-xs" @click="void onOpenDevice(device)">设备详情</Button>
                     </div>
                   </div>

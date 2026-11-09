@@ -28,7 +28,8 @@ const location = useHashLocation();
 const router = useHashRouter();
 const authState = ref<"checking" | "in" | "out">("checking");
 
-const pathname = computed(() => location.value.pathname);
+const nativeDeviceId = window.location.pathname.match(/^\/d\/([a-z0-9]+)\/$/)?.[1];
+const pathname = computed(() => nativeDeviceId && location.value.pathname === '/' ? `/control/${nativeDeviceId}` : location.value.pathname);
 const search = computed(() => location.value.search);
 
 function isLoginRoute(path: string) {

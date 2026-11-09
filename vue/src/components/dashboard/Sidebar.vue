@@ -59,6 +59,7 @@ const toolsNav = computed(() => [
 
 const isActive = (href: string) => {
   if (href === '/devices' && pathname.value.startsWith('/control/')) return true;
+  if (href === '/devices' && pathname.value === '/' && /^\/d\/[a-z0-9]+\/$/.test(window.location.pathname)) return true;
   if (href === "#") return false;
   if (href === "/") return pathname.value === "/";
   return pathname.value === href || pathname.value.startsWith(`${href}/`);
@@ -152,8 +153,7 @@ const onChangePwdOpenChange = (open: boolean) => {
     <!-- Logo -->
     <div class="flex items-center gap-2.5 px-2 py-4">
       <div class="w-full min-w-0">
-        <BrandIdentity />
-        <p class="mt-0.5 truncate pl-10 text-[10px] text-muted-foreground">{{ t.common.manageDeviceAnywhere }}</p>
+        <BrandIdentity :subtitle="t.common.manageDeviceAnywhere" />
       </div>
     </div>
 

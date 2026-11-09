@@ -9,6 +9,7 @@ pip install --break-system-packages driver-1.0.0-cp311-cp311-linux_$(arch).whl
 export PATH=${OPENRESTY}/luajit/bin:$PATH
 
 luajit -b lua/ngx_op_api_gateway_validate.lua ${OPENRESTY}/nginx/ngx_op_api_gateway_validate.luac
+cp lua/bk_device_console.lua ${OPENRESTY}/nginx/bk_device_console.lua
 luajit -b lua/ngx_op_webui_validate.lua ${OPENRESTY}/nginx/ngx_op_webui_validate.luac
 
 cp -pr server   /usr/lib/python3/dist-packages

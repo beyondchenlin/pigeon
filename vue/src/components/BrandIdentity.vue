@@ -1,5 +1,5 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ large?: boolean }>(), { large: false });
+withDefaults(defineProps<{ large?: boolean; subtitle?: string }>(), { large: false, subtitle: '' });
 </script>
 
 <template>
@@ -11,8 +11,9 @@ withDefaults(defineProps<{ large?: boolean }>(), { large: false });
       :height="large ? 56 : 32"
       class="shrink-0 rounded-md bg-white object-contain"
     />
-    <span :class="large ? 'text-2xl' : 'text-sm'" class="whitespace-nowrap font-bold text-foreground">
-      BK群控
-    </span>
+    <div class="min-w-0 flex-1">
+      <span :class="large ? 'text-2xl' : 'text-sm leading-5'" class="block whitespace-nowrap font-bold text-foreground" data-brand-title>BK群控</span>
+      <p v-if="subtitle" class="mt-0.5 truncate text-[10px] leading-[15px] text-muted-foreground" data-brand-subtitle>{{ subtitle }}</p>
+    </div>
   </div>
 </template>

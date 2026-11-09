@@ -10,7 +10,7 @@ import { useDeviceTelemetry, bytes } from '@/lib/device-telemetry';
 import { useDeviceChannel } from '@/lib/device-channel';
 
 const pathname = useHashPathname();
-const id = computed(() => decodeURIComponent(pathname.value.split('/').pop() || ''));
+const id = computed(() => window.location.pathname.match(/^\/d\/([a-z0-9]+)\/$/)?.[1] || decodeURIComponent(pathname.value.split('/').pop() || ''));
 const router = useHashRouter();
 const record = ref<Record<string, any>>({});
 const recordError = ref('');
@@ -95,7 +95,7 @@ onBeforeUnmount(() => { disposed = true; controller?.abort(); clearInterval(time
     <main class="min-w-0 lg:ml-[220px]">
       <header class="flex min-h-14 flex-wrap items-center justify-between gap-2 border-b border-border bg-background px-5 py-2">
         <div class="flex min-w-0 items-center gap-3"><Button variant="ghost" size="icon" aria-label="返回设备列表" @click="router.push('/devices')"><ArrowLeft class="h-4 w-4" /></Button><h1 class="truncate text-base font-semibold">{{ title }}</h1><span class="text-xs" :class="online ? 'text-emerald-600' : 'text-muted-foreground'">● {{ online ? '在线' : '离线' }}</span></div>
-        <div class="flex items-center gap-2"><a :href="`/d/${id}/`" target="_blank" rel="noopener" class="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-orange-600">原版远控<ExternalLink class="h-3 w-3" /></a><Button size="sm" variant="outline" class="text-xs" @click="router.push(`/devices/${id}`)">设备详情与权限</Button></div>
+        <div class="flex items-center gap-2"><a :href="`/d/${id}/?native=1`" target="_blank" rel="noopener" class="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-orange-600">更多工具<ExternalLink class="h-3 w-3" /></a><Button size="sm" variant="outline" class="text-xs" @click="router.push(`/devices/${id}`)">设备详情与权限</Button></div>
       </header>
       <p v-if="recordError" role="alert" class="m-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{{ recordError }} <button class="underline" @click="load">重试</button></p>
       <div class="grid items-start gap-4 p-4 xl:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]">
@@ -125,7 +125,7 @@ onBeforeUnmount(() => { disposed = true; controller?.abort(); clearInterval(time
               <dl class="grid grid-cols-2 gap-3 border-t pt-4 text-xs"><dt class="text-muted-foreground">核心温度</dt><dd>{{ fixed(status.core_temperature, ' °C') }}</dd><dt class="text-muted-foreground">本次开机累计发送</dt><dd>{{ bytes(status.net_io_bytes_sent) }}</dd><dt class="text-muted-foreground">本次开机累计接收</dt><dd>{{ bytes(status.net_io_bytes_recv) }}</dd></dl>
               <Button variant="outline" size="sm" @click="router.push(`/devices/${id}`)">查看历史性能与应用统计</Button>
             </div>
-            <div v-else-if="tab === 'files'" class="p-3"><p class="mb-3 text-xs text-muted-foreground">手机文件管理 · 应用与更多工具可从右上角“原版远控”进入。</p><iframe v-if="online" :src="`/d/${id}/fs/?mode=embed`" title="手机文件管理" class="h-[650px] w-full rounded border" /><p v-else class="p-8 text-center text-sm text-muted-foreground">设备离线，暂时无法浏览文件。</p></div>
+            <div v-else-if="tab === 'files'" class="p-3"><p class="mb-3 text-xs text-muted-foreground">手机文件管理 · 应用与更多工具可从右上角“更多工具”进入。</p><iframe v-if="online" :src="`/d/${id}/fs/?mode=embed`" title="手机文件管理" class="h-[650px] w-full rounded border" /><p v-else class="p-8 text-center text-sm text-muted-foreground">设备离线，暂时无法浏览文件。</p></div>
             <div v-else class="min-h-[300px] p-5"><p class="mb-4 text-xs text-muted-foreground">本页连接与操作记录，最多保留最近 80 条。</p><ol class="space-y-3 text-xs"><li v-for="(entry, index) in logs" :key="index" class="flex gap-4"><time class="shrink-0 tabular-nums text-muted-foreground">{{ entry.time }}</time><span>{{ entry.message }}</span></li></ol></div>
           </div>
         </section>
