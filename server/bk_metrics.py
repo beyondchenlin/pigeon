@@ -14,7 +14,13 @@ def parse_metrics(text):
         text = text.decode('utf-8', errors='replace')
     sections = re.split(r'__BK_(BATTERY|STORAGE|DISPLAY|SYSTEM)__\s*\n', text)
     parts = dict(zip(sections[1::2], sections[2::2]))
-    battery = dict(re.findall(r'^\s*([A-Za-z ]+):\s*(.+?)\s*$', parts.get('BATTERY', ''), re.M))
+    # Parse each line independently: the empty service header must not swallow
+    # the following AC powered field (\s also matches newlines).
+    battery = {}
+    for line in parts.get('BATTERY', '').splitlines():
+        match = re.fullmatch(r'\s*([A-Za-z ]+):\s*(.*?)\s*', line)
+        if match:
+            battery[match[1].strip()] = match[2]
 
     def number(key):
         try:
