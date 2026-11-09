@@ -1,7 +1,15 @@
+FROM node:24-alpine AS frontend
+WORKDIR /build/vue
+COPY vue/package.json vue/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY vue/ ./
+RUN npm run build
+
 FROM debian:bookworm-slim AS builder
 LABEL maintainer="rev1si0n <lamda.devel@gmail.com>"
 
 ADD . /tmp/build
+COPY --from=frontend /build/vue/dist /tmp/build/html
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV OPENRESTY=/usr/local/openresty

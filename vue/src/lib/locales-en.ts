@@ -3,6 +3,9 @@ import type { TranslationSchema } from "./locales-zh";
 const en: TranslationSchema = {
   // Login
   login: {
+    welcome: "Welcome to BK群控",
+    platformDescription: "Unified management for distributed devices and automated tasks",
+    openSourceNotice: "Open-source license and acknowledgements",
     title: "Sign in",
     subtitle: "Enter your username and password below to log into your account",
     username: "Username",
@@ -18,7 +21,6 @@ const en: TranslationSchema = {
   common: {
     loading: "Loading...",
     delete: "Delete",
-    pigeonBrand: "PIGEON",
     manageDeviceAnywhere: "Manage Device Anywhere.",
     selectTimeRange: "Select time range",
     rangeToday: "Today",

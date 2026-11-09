@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import BrandIdentity from "@/components/BrandIdentity.vue";
 import { cn } from "@/lib/utils";
 import { useTranslation, type Locale } from "@/lib/i18n";
 import { apiRequest, formatApiError } from "@/lib/api";
@@ -149,15 +150,9 @@ const onChangePwdOpenChange = (open: boolean) => {
   >
     <!-- Logo -->
     <div class="flex items-center gap-2.5 px-2 py-4">
-      <div class="flex w-full items-center gap-2">
-        <img src="/logo.svg" alt="Pigeon" width="32" height="32" class="shrink-0 rounded-md" />
-        <div class="flex-1 min-w-0">
-          <div class="flex items-baseline gap-0.5">
-            <span class="brand-rounded text-sm font-bold text-foreground">FIRERPA</span>
-            <span class="brand-rounded text-sm font-bold text-orange-500">{{ t.common.pigeonBrand }}</span>
-          </div>
-          <p class="mt-0.5 truncate text-[10px] text-muted-foreground">{{ t.common.manageDeviceAnywhere }}</p>
-        </div>
+      <div class="w-full min-w-0">
+        <BrandIdentity />
+        <p class="mt-0.5 truncate pl-[50px] text-[10px] text-muted-foreground">{{ t.common.manageDeviceAnywhere }}</p>
       </div>
     </div>
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { LogIn, Languages, Check } from "lucide-vue-next";
+import { Languages, Check } from "lucide-vue-next";
+import BrandIdentity from "@/components/BrandIdentity.vue";
 import { Button } from "@/components/ui/button";
 import { FeedbackTip } from "@/components/ui/feedback-tip";
 import { Input } from "@/components/ui/input";
@@ -92,12 +93,7 @@ const handleSubmit = async () => {
 
         <!-- Logo/Title -->
         <div class="mb-8">
-          <div class="flex items-center gap-2 text-2xl font-bold">
-            <div class="flex items-center justify-center rounded-lg bg-primary p-1.5 text-primary-foreground">
-              <LogIn class="h-5 w-5" />
-            </div>
-            <span>Pigeon Console</span>
-          </div>
+          <BrandIdentity large />
         </div>
 
         <!-- Form Header -->
@@ -161,7 +157,10 @@ const handleSubmit = async () => {
 
         <!-- Footer -->
         <div class="mt-8 text-center text-xs text-muted-foreground">
-          <p>&copy; 2024 - present, firerpa.</p>
+          <p>BK群控 · {{ t.common.manageDeviceAnywhere }}</p>
+          <a href="/upstream-license.txt" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block underline underline-offset-2">
+            {{ t.login.openSourceNotice }}
+          </a>
         </div>
       </div>
 
@@ -169,13 +168,11 @@ const handleSubmit = async () => {
       <div class="hidden w-1/2 bg-gradient-to-br from-primary/10 via-background to-primary/5 sm:block">
         <div class="flex h-full items-center justify-center p-12">
           <div class="space-y-8 text-center">
-            <div class="inline-block rounded-lg bg-primary/10 p-8">
-              <div class="h-24 w-24 rounded-lg bg-gradient-to-br from-primary to-primary/50 opacity-50" />
-            </div>
+            <img src="/bk-logo.png" alt="BK群控" width="208" height="208" class="mx-auto rounded-2xl bg-white object-contain" />
             <div class="space-y-3">
-              <h2 class="text-2xl font-bold text-foreground">Welcome</h2>
+              <h2 class="text-2xl font-bold text-foreground">{{ t.login.welcome }}</h2>
               <p class="text-sm text-muted-foreground">
-                Unified management for distributed nodes and autonomous task scheduling
+                {{ t.login.platformDescription }}
               </p>
             </div>
           </div>

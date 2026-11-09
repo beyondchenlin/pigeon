@@ -1,6 +1,9 @@
 const zh = {
   // Login
   login: {
+    welcome: "欢迎使用 BK群控",
+    platformDescription: "统一管理分布式设备，灵活调度自动化任务",
+    openSourceNotice: "开源许可与致谢",
     title: "登录",
     subtitle: "输入用户名和密码以登录您的账户",
     username: "用户名",
@@ -16,7 +19,6 @@ const zh = {
   common: {
     loading: "加载中...",
     delete: "删除",
-    pigeonBrand: "信鸽",
     manageDeviceAnywhere: "随时随地管理设备。",
     selectTimeRange: "选择时间范围",
     rangeToday: "今天",
