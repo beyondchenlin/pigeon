@@ -14,13 +14,18 @@
 
 ## 网络配置
 
-当前使用官方 STUN；传输适配层接受 `iceServers`。没有在前端嵌入 TURN 永久密码，当前发布不保证所有 NAT / UDP 受限网络都能 P2P，无法建立时使用现有鉴权 WSS 通道。后续部署受认证的 TURN 时，应通过经过设备权限校验的 API 发放短期凭据并接入该参数。
+当前网络实测 ICE 直连探测无响应，因此补充自建 coturn。`/api/v1/device/{id}/ice` 在校验登录和设备权限后发放一小时有效的 HMAC 凭据，禁止缓存；共享密钥只保存在服务器。每次 WebRTC 重试重新获取配置，接口超时仍保留 WSS 并尝试直连。媒体优先选择可用直连，受限网络通过 TURN 中转，全部失败时回退鉴权 WSS。
+
+现有香港服务器运行独立 `bk-turn.service`，开放 TCP / UDP 3478 和 UDP 49160–49200；禁用匿名中转、TCP peer relay、内网 / 环回 / 组播目标，限制会话及带宽。不会启动 STF 应用。`ops/install_bk_turn.py` 记录部署配置；只重启 API worker 注册新接口，不重启手机服务或整个 PIGEON 栈。TURN 目前使用 UDP 或 TCP 入口，媒体仍由 WebRTC DTLS-SRTP 加密；不宣称已经覆盖只允许 TLS 443 的极端网络。
+
+依据：[WebRTC 官方 TURN 说明](https://webrtc.org/getting-started/turn-server)、[coturn 配置文档](https://github.com/coturn/coturn/blob/master/README.turnserver)。
 
 本机为 `dongfengqi.top` 和 `*.dongfengqi.top` 增加 SpeedCat 持久直连名单和 Windows WinINET 绕过规则。原有代理开关、节点及其他规则保留；浏览器新请求已核对为服务器直连。换另一台电脑需为该电脑的代理单独配置此域名，网站代码不能更改访问者的系统代理。
 
 ## 验证
 
-- `node --test tests/phone-video.test.mjs`：8 项，覆盖真实首帧切换、ICE / answer 顺序、异步取消、超时清理、媒体与信令故障区分、断线宽限期，以及备用视频切换 / 恢复后的资源释放。
+- `node --test tests/phone-video.test.mjs`：10 项，覆盖真实首帧切换、ICE / answer 顺序、异步取消、超时清理、媒体与信令故障区分、断线宽限期，以及备用视频切换 / 恢复后的资源释放、凭据接口失败和延迟返回。
+- `ops/check_bk_ice.py` 在现有容器检查短期凭据签名、随机标识、密钥不外泄和权限先于签发；原 telemetry 检查保持通过。
 - `vue-tsc --noEmit`、项目原有 `npm run build`。
 - 使用当前手机检查 WSS / WebRTC、回退 / 重连、暂停、页面恢复及原有触控。帧率用实际绘制计数；点击延迟必须以同一浏览器时钟记录输入和可识别画面变化，单独报告样本范围。
 

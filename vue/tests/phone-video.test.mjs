@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { startRtcVideo, startPhoneVideo } from '../src/lib/phone-video.ts';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function setup(t, combined = false) {
+function setup(t, combined = false, extra = {}) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
   const sockets = [], peers = [], videos = [], failures = [], frames = [], modes = [];
   let ready = 0;
@@ -37,7 +37,7 @@ function setup(t, combined = false) {
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
     restores.push(() => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]);
   }
-  const stop = combined ? startPhoneVideo({ url: p => p, decoderUrl: 'https://example.test/decoder.js', canvas: { getContext: () => ({ drawImage() {} }) }, frame: (w,h) => frames.push([w,h]), mode: m => modes.push(m), state() {}, log() {} }) : startRtcVideo({ url: p => p, ready: () => ready++, frame: v => frames.push(v.currentTime), failed: why => failures.push(why) });
+  const stop = combined ? startPhoneVideo({ url: p => p, decoderUrl: 'https://example.test/decoder.js', canvas: { getContext: () => ({ drawImage() {} }) }, frame: (w,h) => frames.push([w,h]), mode: m => modes.push(m), state() {}, log() {}, ...extra }) : startRtcVideo({ url: p => p, ready: () => ready++, frame: v => frames.push(v.currentTime), failed: why => failures.push(why) });
   t.after(() => { stop(); restores.forEach(restore => restore()); });
   return { sockets, peers, videos, failures, frames, modes, stop, get ready() { return ready; } };
 }
@@ -106,4 +106,18 @@ test('failed RTC negotiation leaves the existing fallback socket alive', t => {
   s.sockets.find(x => x.url.includes('/signaling')).onerror();
   assert.equal(fallback.closed, 0); assert.equal(s.sockets.filter(x => x.url.includes('/live')).length, 1);
   s.stop(); assert.equal(fallback.closed, 1);
+});
+
+test('late ICE credentials cannot create a peer after the page stops', async t => {
+  let resolve;
+  const s = setup(t, true, { loadIceServers: () => new Promise(r => resolve = r) });
+  assert.equal(s.peers.length, 0); assert.equal(s.sockets.length, 1);
+  s.stop(); resolve([]); await flush();
+  assert.equal(s.peers.length, 0); assert.equal(s.sockets[0].closed, 1);
+});
+
+test('credential endpoint failure retains fallback and attempts direct RTC', async t => {
+  const s = setup(t, true, { loadIceServers: async () => { throw new Error('timeout'); } });
+  await flush(); assert.equal(s.peers.length, 1);
+  assert.equal(s.sockets.find(x => x.url.includes('/live')).closed, 0);
 });

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play, Maximize, Minimize } from 'lucide-vue-next';
 import { deviceSocket } from '@/lib/device-channel';
 import { startPhoneVideo, type VideoMode } from '@/lib/phone-video';
+import { apiRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 
 const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; rotation?: number }>();
@@ -78,6 +79,10 @@ function start() {
     url: path => deviceSocket(props.deviceId, path), canvas: canvas.value,
     decoderUrl: new URL(`/d/${encodeURIComponent(props.deviceId)}/static/js/decoder.js`, location.href).href,
     webrtc: new URLSearchParams(location.search).get('transport') !== 'ws',
+    loadIceServers: async () => {
+      const response = await apiRequest<{ iceServers: RTCIceServer[] }>(`/api/v1/device/${encodeURIComponent(props.deviceId)}/ice`, { signal: AbortSignal.timeout(3000) });
+      return response.data?.iceServers ?? [];
+    },
     frame: (width, height) => { if (valid()) { screenSize.value = { width, height }; state.value = 'live'; frames.value++; count++; } },
     state: value => { if (valid()) state.value = value; },
     mode: value => { if (valid()) mode.value = value; },

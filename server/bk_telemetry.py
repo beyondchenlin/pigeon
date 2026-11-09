@@ -88,5 +88,6 @@ def install():
     def initialize(self, *args, **kwargs):
         original(self, *args, **kwargs)
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/telemetry', 'server.bk_telemetry', handler='TelemetryHandler')
+        self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ice', 'server.bk_ice', handler='IceHandler')
     Service.__init__ = initialize
     Service._bk_telemetry_installed = True

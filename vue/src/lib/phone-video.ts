@@ -6,6 +6,7 @@ export type VideoOptions = {
   canvas: HTMLCanvasElement;
   decoderUrl: string;
   iceServers?: RTCIceServer[];
+  loadIceServers?: () => Promise<RTCIceServer[]>;
   webrtc?: boolean;
   frame: (width: number, height: number) => void;
   state: (state: string) => void;
@@ -196,9 +197,15 @@ export function startPhoneVideo(o: VideoOptions): Cancel {
   let disposed = false, socket: Cancel | undefined, rtc: Cancel | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined, attempts = 0, connectedAt = 0;
   const fallback = () => { if (!disposed && !socket) socket = startSocketVideo(o); };
-  const upgrade = () => {
+  const upgrade = async () => {
     if (disposed || o.webrtc === false || typeof RTCPeerConnection === 'undefined') return;
-    rtc = startRtcVideo({ url: o.url, iceServers: o.iceServers, stats: o.stats,
+    let iceServers = o.iceServers;
+    if (o.loadIceServers) {
+      try { iceServers = await o.loadIceServers(); }
+      catch { if (!disposed) o.log('中转配置暂不可用，继续尝试直连'); }
+    }
+    if (disposed) return;
+    rtc = startRtcVideo({ url: o.url, iceServers, stats: o.stats,
       ready: () => { if (disposed) return; connectedAt = Date.now(); socket?.(); socket = undefined; o.mode('webrtc'); o.log('已切换 WebRTC 视频'); },
       frame: video => {
         if (disposed) return;
