@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play } from 'lucide-vue-next';
+import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play, Maximize, Minimize } from 'lucide-vue-next';
 import { deviceSocket } from '@/lib/device-channel';
 import { Button } from '@/components/ui/button';
 
 const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; rotation?: number }>();
 const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string] }>();
 const canvas = ref<HTMLCanvasElement>();
+const panel = ref<HTMLDivElement>();
+const viewport = ref<HTMLDivElement>();
+const viewportSize = ref({ width: 320, height: 600 });
+const fullscreen = ref(false);
+const fullscreenError = ref('');
+const canFullscreen = typeof document.documentElement.requestFullscreen === 'function' && document.fullscreenEnabled;
+let resizeObserver: ResizeObserver | undefined;
 const state = ref('connecting');
 const touchReady = ref(false);
 const frames = ref(0);
@@ -15,6 +22,11 @@ const paused = ref(false);
 const visible = ref(!document.hidden);
 const mode = ref<'h264' | 'mjpeg'>('h264');
 const screenSize = ref({ width: 540, height: 1194 });
+const canvasStyle = computed(() => {
+  const ratio = screenSize.value.width / screenSize.value.height;
+  const width = Math.max(1, Math.min(viewportSize.value.width, viewportSize.value.height * ratio));
+  return { width: `${width}px`, height: `${width / ratio}px` };
+});
 const enabled = computed(() => props.online && visible.value && !paused.value);
 let dispose: (() => void) | undefined;
 let retry: ReturnType<typeof setTimeout> | undefined;
@@ -124,29 +136,67 @@ function move(e: PointerEvent) { if (pointer === e.pointerId) send('move', e); }
 function up(e: PointerEvent) { if (pointer !== e.pointerId) return; release(); if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId); }
 function key(code: number) { emit('command', 'device/input/keycode', [0, code]); }
 function visibility() { visible.value = !document.hidden; }
+function fullscreenChanged() { fullscreen.value = document.fullscreenElement === panel.value; }
+async function toggleFullscreen() {
+  fullscreenError.value = '';
+  try {
+    if (document.fullscreenElement === panel.value) await document.exitFullscreen();
+    else await panel.value?.requestFullscreen();
+  } catch { fullscreenError.value = '浏览器未允许全屏，请重试。'; emit('log', fullscreenError.value); }
+}
 watch(enabled, start);
 watch(() => props.rotation, start);
-onMounted(() => { document.addEventListener('visibilitychange', visibility); start(); });
-onBeforeUnmount(() => { stop(); document.removeEventListener('visibilitychange', visibility); });
+onMounted(() => {
+  document.addEventListener('visibilitychange', visibility);
+  document.addEventListener('fullscreenchange', fullscreenChanged);
+  resizeObserver = new ResizeObserver(entries => {
+    const rect = entries[0]?.contentRect;
+    if (rect && rect.width > 0 && rect.height > 0) viewportSize.value = { width: rect.width, height: rect.height };
+  });
+  if (viewport.value) resizeObserver.observe(viewport.value);
+  start();
+});
+onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEventListener('visibilitychange', visibility); document.removeEventListener('fullscreenchange', fullscreenChanged); });
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-lg border border-border bg-background">
-    <div class="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
-      <span class="font-medium">实时画面</span><span class="text-muted-foreground">{{ state === 'live' ? `${fps} FPS · ${mode === 'h264' ? 'H.264' : '兼容模式'}` : '等待画面' }}</span>
-      <button :title="paused ? '恢复画面' : '暂停画面'" :aria-label="paused ? '恢复画面' : '暂停画面'" @click="paused = !paused"><component :is="paused ? Play : Pause" class="h-3.5 w-3.5" /></button>
+  <div ref="panel" class="phone-control overflow-hidden rounded-lg border border-border bg-background">
+    <div class="phone-heading flex items-center justify-between gap-2 border-b px-3 text-xs">
+      <span class="font-semibold">实时画面</span>
+      <div class="flex items-center gap-2"><span class="mr-1 text-muted-foreground">{{ mode === 'h264' ? 'H.264' : '兼容模式' }}</span>
+        <button class="screen-action" :title="paused ? '恢复画面' : '暂停画面'" :aria-label="paused ? '恢复画面' : '暂停画面'" @click="paused = !paused"><component :is="paused ? Play : Pause" class="h-4 w-4" /></button>
+        <button v-if="canFullscreen" class="screen-action" :title="fullscreen ? '退出全屏' : '全屏查看'" :aria-label="fullscreen ? '退出全屏' : '全屏查看'" @click="toggleFullscreen"><component :is="fullscreen ? Minimize : Maximize" class="h-4 w-4" /></button>
+      </div>
     </div>
-    <div class="relative flex min-h-[260px] items-center justify-center bg-black p-2" :data-control-state="state" :data-control-frames="frames">
-      <canvas ref="canvas" :style="{ aspectRatio: `${screenSize.width}/${screenSize.height}`, maxHeight: 'min(68vh, 680px)', width: 'auto', maxWidth: '100%' }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
+    <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-black p-2" :data-control-state="state" :data-control-frames="frames">
+      <canvas ref="canvas" :style="canvasStyle" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
       <div v-if="state !== 'live'" class="absolute inset-0 flex items-center justify-center bg-black/75 px-4 text-center text-sm text-white">{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</div>
     </div>
-    <div class="flex items-center justify-around border-t p-2">
-      <Button variant="ghost" size="icon" title="返回" aria-label="返回手机上一页" :disabled="!commandReady" @click="key(4)"><ArrowLeft class="h-4 w-4" /></Button>
-      <Button variant="ghost" size="icon" title="主页" aria-label="手机主页" :disabled="!commandReady" @click="key(3)"><Circle class="h-4 w-4" /></Button>
-      <Button variant="ghost" size="icon" title="最近任务" aria-label="手机最近任务" :disabled="!commandReady" @click="key(187)"><Square class="h-4 w-4" /></Button>
-      <Button variant="ghost" size="icon" title="唤醒" aria-label="唤醒手机" :disabled="!commandReady" @click="emit('command', 'device/wakeup', [])"><Power class="h-4 w-4" /></Button>
-      <Button variant="ghost" size="icon" title="重连画面" aria-label="重连画面" @click="failures = 0; mode = 'h264'; start()"><RotateCw class="h-4 w-4" /></Button>
+    <div class="phone-navigation border-t" role="group" aria-label="手机操作">
+      <Button variant="ghost" class="nav-action" aria-label="返回手机上一页" :disabled="!commandReady" @click="key(4)"><ArrowLeft class="h-4 w-4" /><span>返回</span></Button>
+      <Button variant="ghost" class="nav-action" aria-label="手机主页" :disabled="!commandReady" @click="key(3)"><Circle class="h-4 w-4" /><span>主页</span></Button>
+      <Button variant="ghost" class="nav-action" aria-label="手机最近任务" :disabled="!commandReady" @click="key(187)"><Square class="h-4 w-4" /><span>最近任务</span></Button>
+      <Button variant="ghost" class="nav-action" aria-label="唤醒手机" :disabled="!commandReady" @click="emit('command', 'device/wakeup', [])"><Power class="h-4 w-4" /><span>唤醒</span></Button>
+      <Button variant="ghost" class="nav-action" aria-label="重连画面" @click="paused = false; failures = 0; mode = 'h264'; start()"><RotateCw class="h-4 w-4" /><span>重连</span></Button>
     </div>
-    <p class="border-t px-3 py-2 text-center text-[11px] text-muted-foreground">{{ touchReady ? '可直接点击、拖动手机画面' : '触控通道尚未连接' }}</p>
+    <p class="phone-hint text-center text-[11px] text-muted-foreground">{{ touchReady ? '点击或拖动手机画面进行操作' : '触控通道尚未连接' }}</p>
+    <p v-if="fullscreenError" role="alert" class="px-3 pb-2 text-xs text-amber-700">{{ fullscreenError }}</p>
+    <div class="phone-status border-t text-muted-foreground"><span>{{ commandReady ? '控制通道已连接' : '控制通道未连接' }}</span><span title="浏览器最近两秒实际绘制的帧数，静止画面可能为 0；不是请求帧率">帧率 {{ state === 'live' ? `${fps} FPS` : '—' }}</span><span title="尚未采集端到端操作延迟，不以帧率或服务器请求时间代替">延迟 —</span></div>
   </div>
 </template>
+
+<style scoped>
+.phone-control { display: flex; flex-direction: column; min-width: 0; }
+.phone-heading { min-height: 42px; flex-shrink: 0; }
+.screen-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 4px; }
+.screen-action:hover { background: var(--muted); }
+.screen-viewport { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.phone-navigation { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px 7px 0; flex-shrink: 0; }
+.phone-navigation .nav-action { height: 46px; padding: 4px 0; gap: 4px; flex-direction: column; font-size: 10px; line-height: 14px; font-weight: 400; }
+.phone-hint { padding: 5px 8px 9px; flex-shrink: 0; }
+.phone-status { display: flex; flex-wrap: wrap; gap: 3px 12px; padding: 8px 12px; font-size: 10px; line-height: 14px; flex-shrink: 0; }
+.phone-control:fullscreen { width: 100vw; height: 100dvh; max-width: none; border-radius: 0; }
+.phone-control:fullscreen .phone-navigation { width: min(440px, 100%); align-self: center; }
+.phone-control:fullscreen .phone-status { justify-content: center; }
+.screen-action:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+</style>
