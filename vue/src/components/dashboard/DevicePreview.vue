@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, watch } from "vue";
+import { onBeforeUnmount, watch, type ComponentPublicInstance } from "vue";
 
 const props = defineProps<{
   deviceId: string;
@@ -57,13 +57,13 @@ const bindPreview = () => {
   startPreview(canvasEl, props.deviceId);
 };
 
-const setCanvasRef = (el: Element | null) => {
-  if (!el) {
+const setCanvasRef = (el: Element | ComponentPublicInstance | null) => {
+  if (!(el instanceof HTMLCanvasElement)) {
     canvasEl = null;
     stopPreview();
     return;
   }
-  canvasEl = el as HTMLCanvasElement;
+  canvasEl = el;
   bindPreview();
 };
 

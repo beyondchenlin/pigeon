@@ -83,6 +83,7 @@ const en: TranslationSchema = {
 
   // Devices page
   devices: {
+    wall: { offline: 'Device offline', paused: 'Preview paused', reconnecting: 'Reconnecting', connecting: 'Connecting screen', openToCheck: 'Open control to check connection', screen: 'Live device screen', live: 'Live' },
     pageTitle: "Devices",
     addDevice: "Add Device",
     addDialogTitle: "Connect Device",

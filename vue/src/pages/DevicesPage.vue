@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { matchHashPath, useHashPathname, useHashRouter } from "@/lib/hash-router";
 import {
   ArrowRightLeft,
@@ -16,6 +16,11 @@ import {
   FolderPlus,
   FolderUp,
   ListFilter,
+  LayoutGrid,
+  List,
+  Pause,
+  Play,
+  Battery,
   Plus,
   Power,
   RotateCw,
@@ -34,6 +39,7 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { HexColorPicker } from "@/components/ui/color-picker";
 import { AddDeviceDialog } from "@/components/devices/add-device-dialog";
 import { DeviceStats } from "@/components/devices/device-stats";
+import LiveDevicePreview from "@/components/devices/LiveDevicePreview.vue";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -64,6 +70,7 @@ import {
 import { interpolate, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { apiRequest, formatApiError } from "@/lib/api";
+import DeviceBattery from "@/components/devices/DeviceBattery.vue";
 import { androidVersionFromSdk } from "@/lib/android-version";
 
 type DeviceStatus = "pending" | "online" | "offline";
@@ -84,7 +91,7 @@ type DeviceRecord = {
   lastHeartbeatMin: number;
   groupId: string | null;
   sdk: string;
-  batt_percent: number;
+  batt_percent: number | null;
 };
 
 type DeviceGroup = {
@@ -189,10 +196,9 @@ function mapDeviceFromApi(device: DeviceApiItem, groupId: string | null): Device
 }
 
 function normalizeBatteryPercent(value: number | string | undefined) {
-  const raw = Number(value || 0);
-  if (!Number.isFinite(raw)) return 100;
-  const clamped = Math.min(100, Math.max(0, raw));
-  return clamped === 0 ? 100 : clamped;
+  if (value == null || value === '') return null;
+  const raw = Number(value);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : null;
 }
 
 function batteryColor(percent: number) {
@@ -262,6 +268,8 @@ const loadError = ref<string | null>(null);
 const loading = ref(false);
 const summary = ref({ total: 0, usable: 0, working: 0, offline: 0, ungrouped: 0 });
 const selectedGroupId = ref<GroupFilterId>("all");
+const viewMode = ref<"cards" | "list">("cards");
+const previewsPaused = ref(false);
 const groupKeyword = ref("");
 
 const deviceKeyword = ref("");
@@ -327,7 +335,7 @@ const tokenConfigMode = ref<"p2p" | "forward">("p2p");
 const platformConfig = ref<PlatformConfig | null>(null);
 const forwardConfigDevice = ref<ForwardConfigDevice | null>(null);
 const page = ref(1);
-const pageSize = ref(100);
+const pageSize = ref(24);
 const sortConfig = ref<{ key: string; order: "asc" | "desc" } | null>(null);
 const pageTotal = ref(0);
 const requestRef = { current: 0 };
@@ -561,9 +569,10 @@ const buildDeviceApiQuery = () => {
   return params;
 };
 
-const loadDeviceList = async () => {
+const loadDeviceList = async (background = false) => {
+  if (background && loading.value) return;
   const currentReq = ++requestRef.current;
-  loading.value = true;
+  if (!background) loading.value = true;
   loadError.value = null;
   try {
     const params = buildDeviceApiQuery();
@@ -591,12 +600,16 @@ const loadDeviceList = async () => {
       .filter((d) => d.id);
     devices.value = mapped;
     pageTotal.value = total;
-    selectedIds.value = new Set();
+    selectedIds.value = background
+      ? new Set([...selectedIds.value].filter((id) => mapped.some((device) => device.id === id)))
+      : new Set();
   } catch (err) {
     if (currentReq !== requestRef.current) return;
     loadError.value = formatApiError(err, "Failed to load devices");
-    devices.value = [];
-    pageTotal.value = 0;
+    if (!background) {
+      devices.value = [];
+      pageTotal.value = 0;
+    }
   } finally {
     if (currentReq === requestRef.current) loading.value = false;
   }
@@ -622,6 +635,22 @@ watch([hashPathname, targetGroupId], () => {
 watch([selectedGroupId, deferredDeviceKeyword, statusFilter, sortConfig, page, pageSize], () => {
   void loadDeviceList();
 }, { immediate: true });
+
+// Refresh statuses without remounting previews or clearing the user's selection.
+let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+let disposed = false;
+async function refreshWall() {
+  if (!document.hidden) {
+    await Promise.allSettled([loadDeviceList(true), loadGroupsAndSummary()]);
+  }
+  if (!disposed) refreshTimer = setTimeout(refreshWall, 15000);
+}
+onMounted(() => { refreshTimer = setTimeout(refreshWall, 15000); });
+onBeforeUnmount(() => {
+  disposed = true;
+  ++requestRef.current;
+  clearTimeout(refreshTimer);
+});
 
 watch([moveGroupOpen, moveGroupSearch], (_, __, onCleanup) => {
   if (!moveGroupOpen.value) return;
@@ -1525,7 +1554,12 @@ const onTokenConfigOpenChange = (open: boolean) => {
                 </DropdownMenu>
 
                 <!-- View - column toggle -->
-                <div>
+                <div class="inline-flex rounded-md border border-border p-0.5" aria-label="设备视图">
+                  <Button size="sm" :variant="viewMode === 'cards' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'cards'" @click="viewMode = 'cards'"><LayoutGrid class="h-3.5 w-3.5" />卡片</Button>
+                  <Button size="sm" :variant="viewMode === 'list' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'list'" @click="viewMode = 'list'"><List class="h-3.5 w-3.5" />列表</Button>
+                </div>
+                <Button v-if="viewMode === 'cards'" size="sm" variant="outline" class="h-8 gap-1.5 text-xs" @click="previewsPaused = !previewsPaused"><component :is="previewsPaused ? Play : Pause" class="h-3.5 w-3.5" />{{ previewsPaused ? '恢复预览' : '暂停预览' }}</Button>
+                <div v-if="viewMode === 'list'">
                   <DropdownMenu>
                     <DropdownMenuTrigger as-child>
                       <Button variant="outline" size="sm" class="h-8 gap-1.5 text-xs font-normal">
@@ -1584,6 +1618,33 @@ const onTokenConfigOpenChange = (open: boolean) => {
                   {{ t.devices.viewAllDevices }}
                 </Button>
               </EmptyState>
+            </div>
+            <div v-else-if="viewMode === 'cards'" class="min-h-0 flex-1 overflow-auto p-4">
+              <div class="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+                <Checkbox :checked="allFilteredSelected ? true : partialFilteredSelected ? 'indeterminate' : false" @update:checked="onToggleSelectAllFiltered()" :aria-label="t.devices.selectAllFiltered" />
+                <span>选择本页设备</span><span class="ml-auto">点击画面进入远控</span>
+              </div>
+              <div class="grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] items-start gap-4 pb-14">
+                <article v-for="device in pagedRows" :key="device.id" class="w-full max-w-[240px] overflow-hidden rounded-lg border bg-background transition-shadow hover:shadow-md" :class="selectedIds.has(device.id) ? 'border-orange-400 ring-1 ring-orange-100' : 'border-border'" :data-device-card="device.id">
+                  <div class="flex items-center gap-2 px-3 py-2.5">
+                    <Checkbox :checked="selectedIds.has(device.id)" @update:checked="onToggleDevice(device.id, $event)" :aria-label="`选择 ${device.id}`" />
+                    <span class="min-w-0 flex-1 truncate text-xs font-semibold" :title="device.remark || device.model">{{ device.remark || (device.model !== '-' ? device.model : device.id) }}</span>
+                    <span class="shrink-0 text-[11px]" :class="statusTextColor(device.status)">● {{ getStatusLabel(device.status) }}</span>
+                  </div>
+                  <button type="button" class="block aspect-[9/18] w-full focus-visible:outline-2 focus-visible:outline-orange-500" :aria-label="`远控 ${device.id}`" :disabled="device.status !== 'online'" @click="router.push(`/control/${device.id}`)">
+                    <LiveDevicePreview :device-id="device.id" :online="device.status === 'online'" :pending="device.status === 'pending'" :paused="previewsPaused" />
+                  </button>
+                  <div class="space-y-2 px-3 py-2.5">
+                    <p class="truncate text-[11px] text-muted-foreground" :title="device.id">{{ device.id }}</p>
+                    <div class="flex items-center justify-between gap-1"><span class="text-xs text-muted-foreground">{{ androidVersionFromSdk(device.sdk) }}</span><DeviceBattery :device-id="device.id" :online="device.status === 'online'" /></div>
+                    <div class="flex gap-2 border-t border-border pt-2">
+                      <Button v-if="device.status === 'pending'" size="sm" class="h-7 flex-1 text-xs" @click="void onOpenDevice(device)">接入配置</Button>
+                      <Button v-else size="sm" class="h-7 flex-1 bg-orange-500 text-xs text-white hover:bg-orange-600" :disabled="device.status !== 'online'" @click="router.push(`/control/${device.id}`)">打开远控</Button>
+                      <Button size="sm" variant="outline" class="h-7 flex-1 text-xs" @click="void onOpenDevice(device)">设备详情</Button>
+                    </div>
+                  </div>
+                </article>
+              </div>
             </div>
             <div v-else class="min-h-0 flex-1 overflow-auto">
               <table class="w-full text-xs border-collapse">
@@ -1671,18 +1732,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
                     </td>
 
                     <td v-if="visibleColumns.has('batt_percent')" class="px-3 py-2 truncate" @click="void onOpenDevice(device)">
-                      <div class="flex items-center gap-2">
-                        <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted/40">
-                          <div
-                            class="h-full transition-all"
-                            :style="{
-                              width: `${device.batt_percent}%`,
-                              backgroundColor: batteryColor(device.batt_percent),
-                            }"
-                          />
-                        </div>
-                        <span class="min-w-[32px] text-right text-xs tabular-nums text-muted-foreground">{{ device.batt_percent }}%</span>
-                      </div>
+                      <DeviceBattery :device-id="device.id" :online="device.status === 'online'" />
                     </td>
 
                     <td
@@ -1777,7 +1827,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem v-for="n in [100, 300, 500, 700, 900]" :key="n" :value="String(n)" class="text-xs">{{ n }}</SelectItem>
+                    <SelectItem v-for="n in [12, 24, 48, 100]" :key="n" :value="String(n)" class="text-xs">{{ n }}</SelectItem>
                   </SelectContent>
                 </Select>
                 <span class="text-xs">{{ t.devices.pagination.rowsPerPage }}</span>

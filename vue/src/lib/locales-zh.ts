@@ -81,6 +81,7 @@ const zh = {
 
   // Devices page
   devices: {
+    wall: { offline: '设备离线', paused: '预览已暂停', reconnecting: '画面重连中', connecting: '正在连接画面', openToCheck: '可进入远控查看连接状态', screen: '手机实时画面', live: '实时' },
     pageTitle: "设备",
     addDevice: "添加设备",
     addDialogTitle: "接入设备",
