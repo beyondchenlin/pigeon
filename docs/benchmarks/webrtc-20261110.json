@@ -1,0 +1,229 @@
+{
+  "deployment": "d349972db37dfd0c19170198a9a89157a9d7c8d7",
+  "phone_network": "cellular",
+  "rtc_path": "srflx-srflx UDP",
+  "conditions": "540x1194, requested 15 fps, quality 25; both browser runs kept actively painting with temporary 16x16 CDP screencast; sequential samples",
+  "click_measurement": "touch up send to target pixel drawn using same performance clock",
+  "results": {
+    "ws": {
+      "click_ms": [
+        1364.3,
+        1305.7,
+        1371.1,
+        1961.9,
+        2065.8,
+        1217.1,
+        1605,
+        1568,
+        786.7,
+        849.8,
+        1419.8,
+        982.8,
+        1046.1,
+        1455.2,
+        1651.8,
+        1050.4,
+        1288.5,
+        1261.3,
+        1585.7,
+        750.3,
+        913.3,
+        681.2,
+        538.6,
+        784.6,
+        992,
+        1085.3,
+        706.6,
+        811.1,
+        881.5,
+        1330.8
+      ],
+      "motion": [
+        {
+          "before": {
+            "at": 279367.5,
+            "wall": 1794267767419,
+            "frames": 715,
+            "mode": "h264",
+            "path": {},
+            "rx": null
+          },
+          "after": {
+            "at": 289367.90000000596,
+            "wall": 1794267777419,
+            "frames": 865,
+            "mode": "h264",
+            "path": {},
+            "rx": null
+          },
+          "raf": 598,
+          "fps": 14.9994000239901,
+          "gaps": {
+            "median": 68.80000001192093,
+            "p95": 148,
+            "max": 308.59999999403954
+          }
+        },
+        {
+          "before": {
+            "at": 289369.8000000119,
+            "wall": 1794267777421,
+            "frames": 865,
+            "mode": "h264",
+            "path": {},
+            "rx": null
+          },
+          "after": {
+            "at": 299373.90000000596,
+            "wall": 1794267787425,
+            "frames": 1016,
+            "mode": "h264",
+            "path": {},
+            "rx": null
+          },
+          "raf": 593,
+          "fps": 15.093811537278713,
+          "gaps": {
+            "median": 53.400000005960464,
+            "p95": 149.90000000596046,
+            "max": 1244.5999999940395
+          }
+        }
+      ]
+    },
+    "webrtc": {
+      "click_ms": [
+        840.9,
+        620.6,
+        547.7,
+        505.4,
+        555.6,
+        473.3,
+        460.9,
+        417.7,
+        414.2,
+        761.2,
+        1131.8,
+        659.9,
+        617.5,
+        619.9,
+        606.4,
+        617.3,
+        621.5,
+        873,
+        705.7,
+        744.8,
+        641.5,
+        648.5,
+        836.7,
+        594.7,
+        625.8,
+        605.1,
+        558.9,
+        585.3,
+        636.4,
+        582.7
+      ],
+      "motion": [
+        {
+          "before": {
+            "at": 21134.20000001788,
+            "wall": 1794267843921,
+            "frames": 75,
+            "mode": "webrtc",
+            "rtt": 0.048,
+            "path": {
+              "local": "srflx",
+              "remote": "srflx"
+            },
+            "rx": {
+              "frames": 233,
+              "dropped": 0,
+              "lost": 0,
+              "bytes": 644999,
+              "decode": 0.12322,
+              "buffer": 10.42468,
+              "emitted": 233
+            }
+          },
+          "after": {
+            "at": 31135.40000000596,
+            "wall": 1794267853922,
+            "frames": 222,
+            "mode": "webrtc",
+            "rtt": 0.055,
+            "path": {
+              "local": "srflx",
+              "remote": "srflx"
+            },
+            "rx": {
+              "frames": 383,
+              "dropped": 0,
+              "lost": 0,
+              "bytes": 1028955,
+              "decode": 0.206694,
+              "buffer": 17.114653999999998,
+              "emitted": 383
+            }
+          },
+          "raf": 600,
+          "fps": 14.698236211672121,
+          "gaps": {
+            "median": 66.80000001192093,
+            "p95": 100.2000000178814,
+            "max": 117.59999999403954
+          }
+        },
+        {
+          "before": {
+            "at": 31137.5,
+            "wall": 1794267853924,
+            "frames": 222,
+            "mode": "webrtc",
+            "rtt": 0.055,
+            "path": {
+              "local": "srflx",
+              "remote": "srflx"
+            },
+            "rx": {
+              "frames": 383,
+              "dropped": 0,
+              "lost": 0,
+              "bytes": 1028955,
+              "decode": 0.206694,
+              "buffer": 17.114653999999998,
+              "emitted": 383
+            }
+          },
+          "after": {
+            "at": 41138.59999999404,
+            "wall": 1794267863925,
+            "frames": 370,
+            "mode": "webrtc",
+            "rtt": 0.049,
+            "path": {
+              "local": "srflx",
+              "remote": "srflx"
+            },
+            "rx": {
+              "frames": 533,
+              "dropped": 0,
+              "lost": 0,
+              "bytes": 1410856,
+              "decode": 0.282149,
+              "buffer": 23.748950999999998,
+              "emitted": 533
+            }
+          },
+          "raf": 597,
+          "fps": 14.798372179069123,
+          "gaps": {
+            "median": 66.69999998807907,
+            "p95": 100,
+            "max": 117
+          }
+        }
+      ]
+    }
+  }
+}
