@@ -20,7 +20,7 @@
 
 ## 验证
 
-- `node --test tests/phone-video.test.mjs`：真实首帧切换、ICE / answer 顺序、异步取消、超时清理、媒体与信令故障区分、断线宽限期。
+- `node --test tests/phone-video.test.mjs`：8 项，覆盖真实首帧切换、ICE / answer 顺序、异步取消、超时清理、媒体与信令故障区分、断线宽限期，以及备用视频切换 / 恢复后的资源释放。
 - `vue-tsc --noEmit`、项目原有 `npm run build`。
 - 使用当前手机检查 WSS / WebRTC、回退 / 重连、暂停、页面恢复及原有触控。帧率用实际绘制计数；点击延迟必须以同一浏览器时钟记录输入和可识别画面变化，单独报告样本范围。
 

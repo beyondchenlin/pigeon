@@ -104,7 +104,11 @@ function move(e: PointerEvent) {
   if (pointer !== e.pointerId) return; lastMove = e;
   if (!moveRaf) moveRaf = requestAnimationFrame(() => { moveRaf = 0; if (lastMove && (touch?.bufferedAmount ?? 0) < 32768) send('move', lastMove); lastMove = undefined; });
 }
-function up(e: PointerEvent) { if (pointer !== e.pointerId) return; release(); if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId); }
+function up(e: PointerEvent) {
+  if (pointer !== e.pointerId) return;
+  if (lastMove && (touch?.bufferedAmount ?? 0) < 32768) send('move', lastMove);
+  release(); if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId);
+}
 function key(code: number) { emit('command', 'device/input/keycode', [0, code]); }
 function visibility() { visible.value = !document.hidden; }
 function fullscreenChanged() { fullscreen.value = document.fullscreenElement === panel.value; }

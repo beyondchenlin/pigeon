@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { startRtcVideo } from '../src/lib/phone-video.ts';
+import { startRtcVideo, startPhoneVideo } from '../src/lib/phone-video.ts';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-function setup(t) {
+function setup(t, combined = false) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
-  const sockets = [], peers = [], videos = [], failures = [], frames = [];
+  const sockets = [], peers = [], videos = [], failures = [], frames = [], modes = [];
   let ready = 0;
   class Socket {
     static OPEN = 1;
-    constructor() { this.readyState = 0; this.sent = []; this.closed = 0; sockets.push(this); }
+    constructor(url) { this.url = url; this.readyState = 0; this.sent = []; this.closed = 0; sockets.push(this); }
     send(data) { this.sent.push(JSON.parse(data)); }
     open() { this.readyState = 1; this.onopen?.(); }
     receive(data) { this.onmessage?.({ data: JSON.stringify(data) }); }
@@ -32,14 +32,14 @@ function setup(t) {
     }; videos.push(video); return video;
   }};
   const restores = [];
-  for (const [name, value] of Object.entries({ WebSocket: Socket, RTCPeerConnection: Peer, document: doc, cancelAnimationFrame() {} })) {
+  for (const [name, value] of Object.entries({ WebSocket: Socket, RTCPeerConnection: Peer, document: doc, cancelAnimationFrame() {}, Worker: class { terminate() {} } })) {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
     restores.push(() => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]);
   }
-  const stop = startRtcVideo({ url: p => p, ready: () => ready++, frame: v => frames.push(v.currentTime), failed: why => failures.push(why) });
+  const stop = combined ? startPhoneVideo({ url: p => p, decoderUrl: 'https://example.test/decoder.js', canvas: { getContext: () => ({ drawImage() {} }) }, frame: (w,h) => frames.push([w,h]), mode: m => modes.push(m), state() {}, log() {} }) : startRtcVideo({ url: p => p, ready: () => ready++, frame: v => frames.push(v.currentTime), failed: why => failures.push(why) });
   t.after(() => { stop(); restores.forEach(restore => restore()); });
-  return { sockets, peers, videos, failures, frames, stop, get ready() { return ready; } };
+  return { sockets, peers, videos, failures, frames, modes, stop, get ready() { return ready; } };
 }
 
 test('keeps fallback until a real drawable RTC frame arrives', async t => {
@@ -89,4 +89,21 @@ test('transient disconnect recovers before the grace deadline', t => {
   t.mock.timers.tick(2000); assert.deepEqual(s.failures, []);
   s.peers[0].connectionState = 'disconnected'; s.peers[0].onconnectionstatechange();
   t.mock.timers.tick(3000); assert.equal(s.failures.length, 1);
+});
+
+test('RTC first frame retires fallback, failed media opens a fresh fallback', t => {
+  const s = setup(t, true), fallback = s.sockets.find(x => x.url.includes('/live'));
+  assert.equal(fallback.closed, 0); assert.deepEqual(s.modes, ['h264']);
+  s.videos[0].emit(); assert.equal(fallback.closed, 1); assert.equal(s.modes.at(-1), 'webrtc');
+  s.peers[0].connectionState = 'failed'; s.peers[0].onconnectionstatechange();
+  assert.equal(s.modes.at(-1), 'h264'); assert.equal(s.sockets.filter(x => x.url.includes('/live')).length, 2);
+  const count = s.sockets.length; s.stop(); t.mock.timers.tick(60000);
+  assert.equal(s.sockets.length, count); assert.ok(s.sockets.every(x => x.closed === 1));
+});
+
+test('failed RTC negotiation leaves the existing fallback socket alive', t => {
+  const s = setup(t, true), fallback = s.sockets.find(x => x.url.includes('/live'));
+  s.sockets.find(x => x.url.includes('/signaling')).onerror();
+  assert.equal(fallback.closed, 0); assert.equal(s.sockets.filter(x => x.url.includes('/live')).length, 1);
+  s.stop(); assert.equal(fallback.closed, 1);
 });
