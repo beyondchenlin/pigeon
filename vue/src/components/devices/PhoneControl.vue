@@ -137,6 +137,11 @@ function up(e: PointerEvent) { if (pointer !== e.pointerId) return; release(); i
 function key(code: number) { emit('command', 'device/input/keycode', [0, code]); }
 function visibility() { visible.value = !document.hidden; }
 function fullscreenChanged() { fullscreen.value = document.fullscreenElement === panel.value; }
+function fullscreenKey(event: KeyboardEvent) {
+  if (event.key === 'Escape' && document.fullscreenElement === panel.value) {
+    void document.exitFullscreen().catch(() => { fullscreenError.value = '退出全屏失败，请点击退出按钮重试。'; });
+  }
+}
 async function toggleFullscreen() {
   fullscreenError.value = '';
   try {
@@ -149,6 +154,7 @@ watch(() => props.rotation, start);
 onMounted(() => {
   document.addEventListener('visibilitychange', visibility);
   document.addEventListener('fullscreenchange', fullscreenChanged);
+  document.addEventListener('keydown', fullscreenKey);
   resizeObserver = new ResizeObserver(entries => {
     const rect = entries[0]?.contentRect;
     if (rect && rect.width > 0 && rect.height > 0) viewportSize.value = { width: rect.width, height: rect.height };
@@ -156,7 +162,7 @@ onMounted(() => {
   if (viewport.value) resizeObserver.observe(viewport.value);
   start();
 });
-onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEventListener('visibilitychange', visibility); document.removeEventListener('fullscreenchange', fullscreenChanged); });
+onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEventListener('visibilitychange', visibility); document.removeEventListener('fullscreenchange', fullscreenChanged); document.removeEventListener('keydown', fullscreenKey); });
 </script>
 
 <template>
