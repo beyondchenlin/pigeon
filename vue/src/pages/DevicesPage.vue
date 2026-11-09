@@ -1244,9 +1244,9 @@ const onTokenConfigOpenChange = (open: boolean) => {
         :offline="summary.offline"
       />
 
-      <main class="flex min-h-0 flex-1 gap-2 overflow-hidden xl:grid xl:grid-cols-[220px_minmax(0,1fr)]">
+      <main class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden md:grid md:grid-cols-[180px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)]">
         <!-- Groups Panel -->
-        <div class="flex h-full min-h-0 flex-col overflow-hidden">
+        <div class="hidden h-full min-h-0 flex-col overflow-hidden md:flex">
           <Card class="flex h-full min-h-0 flex-col gap-0 overflow-hidden rounded-lg border border-gray-100 bg-white py-0 shadow-sm">
             <CardHeader class="shrink-0 border-b border-gray-50 px-0 pb-0">
               <div class="flex items-center justify-between p-2.5">
@@ -1449,7 +1449,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
         </div>
 
         <!-- Device List Panel -->
-        <Card class="h-full min-h-0 gap-0 overflow-hidden rounded-lg border border-gray-100 bg-white py-0 shadow-sm">
+        <Card class="h-full min-h-0 min-w-0 gap-0 overflow-hidden rounded-lg border border-gray-100 bg-white py-0 shadow-sm">
           <!-- List header -->
           <CardHeader class="gap-3 border-b border-gray-100 px-4 py-3">
             <FeedbackTip v-if="loadError" :message="loadError" variant="error" :compact="false" />
@@ -1464,7 +1464,10 @@ const onTokenConfigOpenChange = (open: boolean) => {
               </div>
 
               <!-- Toolbar -->
-              <div class="flex items-center gap-2">
+              <div class="flex min-w-0 flex-wrap items-center gap-2">
+                <select v-model="selectedGroupId" aria-label="设备分组" class="h-8 max-w-[180px] rounded border px-2 text-xs md:hidden">
+                  <option value="all">全部设备</option><option value="ungrouped">未分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
+                </select>
                 <!-- Search -->
                 <div class="relative">
                   <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />

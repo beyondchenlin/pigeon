@@ -8,7 +8,8 @@ import tailwindcss from '@tailwindcss/vite'
 const target = (process.env.PIGEON_API_BASE_URL || 'https://192.168.50.200:8000').replace(/\/+$/, '')
 
 export default defineConfig({
-  base: './',
+  // The console is also served at /d/<device>/; assets belong to the cloud root.
+  base: '/',
   build: {
     assetsDir: 'static',
     chunkSizeWarningLimit: 4096,
