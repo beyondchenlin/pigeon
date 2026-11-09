@@ -59,7 +59,7 @@ const sections = computed(() => [
     ['系统分辨率', data.value.display?.width && data.value.display?.height ? `${data.value.display.width} × ${data.value.display.height}` : '—'],
     ['屏幕密度', data.value.display?.density ? `${data.value.display.density} dpi` : '—'],
     ['旋转方向', info.value.displayRotation != null || currentDisplay.value.rotation != null ? `${rotation.value * 90}°` : '—'],
-    ['显示屏数量', displays.value.length ? String(displays.value.length) : '—']
+    ['显示设备', displays.value.length ? `${displays.value.length}（含虚拟显示）` : '—']
   ] },
   { title: '性能与存储', icon: Cpu, rows: [
     ['CPU 使用率', fixed(status.value.cpu_percent, '%')], ['CPU 核心', text(status.value.cpu_count)],

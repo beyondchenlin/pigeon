@@ -7,7 +7,7 @@
 - 配色沿用现有控制台：白色 `#ffffff`、页面灰 `#f5f5f7`、正文 `#171717`、在线绿 `#16a34a`、离线灰 `#737373`。手机画面为视觉主体，不增加装饰动画。
 - 字体沿用现有系统字体，侧栏品牌恢复原来的 `text-sm`（14px）；卡片设备名 12px，辅助信息 11px。
 - 左侧分组，右侧筛选工具栏、竖屏卡片网格；卡片从左向右排列，宽 196–240px，不因只有一台设备而撑满页面。
-- 卡片保留独立选择框、详情入口；点击画面进入 `/control/:id` 工作台。离线/未接入设备不建立画面连接。
+- 卡片保留独立选择框、详情入口；点击画面直接进入原有 `/d/<id>/` 手机远控地址。`/#/control/<id>` 仅保留兼容入口。离线/未接入设备不建立画面连接。
 
 ```text
 分组      全部设备 / 筛选 / 卡片·列表 / 暂停预览
@@ -22,7 +22,9 @@
 
 ## 工作台与数据来源
 
-左侧画面可点击、拖动，下方提供返回、主页、最近任务、唤醒和重连。右侧按基本信息、电池、屏幕、性能、网络和当前应用分组。另有实时性能、原生文件管理、有限长度连接日志。原有设备详情、权限和历史性能仍从 `/devices/:id` 访问，原版远控保留入口。
+左侧画面可点击、拖动，下方提供返回、主页、最近任务、唤醒和重连。右侧按基本信息、电池、屏幕、性能、网络和当前应用分组。另有实时性能、原生文件管理、有限长度连接日志。原有设备详情、权限和历史性能仍从 `/#/devices/<id>` 访问；“更多工具”通过 `/d/<id>/?native=1` 保留手机原生工具界面。
+
+品牌遵循上游原始布局：32px Logo 与右侧“14px 品牌名 + 10px 说明”作为两列垂直居中，不把说明文字单独放在整行下面。品牌名和说明左边界一致。
 
 状态通道直接读取手机的 `status`、`device/info`、`display/list`，每 3 秒刷新。旧版状态消息没有电量；注册记录默认 0，原前端还把 0 改成 100，不能作为实时电量来源。
 
@@ -37,6 +39,8 @@
 现有试验容器：将两个 `server/bk_*.py` 及 `ops/check_bk_telemetry.py` 放到持久目录 `/user/phone-pilot/bk-server`，将 `ops/run_bk_server.py` 放到 `/user/phone-pilot`。预检后执行 `ops/install_bk_telemetry.py`，只重启 API 的 `service:server-0`。不要 `supervisorctl update service`，它会重启整个服务组并中断手机隧道。
 
 安装器保存原 API 入口和 supervisor 配置到 `bk-telemetry-recovery`，保留至验收后复查。回滚时原样恢复两文件、仅重启 API，并将 frontend/current 切回原 release。未来完整镜像构建由 `server/__main__.py` 自动安装扩展，无需容器补丁。
+
+原远控地址：将 `lua/bk_device_console.lua` 上传到 `/user/phone-pilot`，执行 `ops/install_bk_console.py`。Lua 在现有网关鉴权 **之后** 替换精确的 `/d/<id>/` HTML 请求，返回 `Cache-Control: no-store`；WebSocket、文件管理和手机静态资源仍走原代理。Vite 资源地址固定从云端根路径加载，避免与手机的 `/d/<id>/static` 冲突。安装器只校验并重载 Nginx，不重启手机连接服务。回滚使用 `bk-telemetry-recovery/nginx-before-console.conf`。
 
 ## 验收范围
 

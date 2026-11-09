@@ -19,6 +19,7 @@ export function useDeviceTelemetry(id: Ref<string>, enabled: Ref<boolean>) {
   let controller: AbortController | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let generation = 0;
+  let lastAttempt = 0;
   const active = computed(() => enabled.value && pageVisible.value);
   const stale = computed(() => !active.value || data.value.stale || !data.value.sampled_at || now.value / 1000 - data.value.sampled_at > 35);
   const sampledTime = computed(() => data.value.sampled_at ? new Date(data.value.sampled_at * 1000).toLocaleTimeString() : '—');
@@ -26,11 +27,13 @@ export function useDeviceTelemetry(id: Ref<string>, enabled: Ref<boolean>) {
   async function refresh() {
     if (!active.value || loading.value) return;
     const gen = generation;
-    controller = new AbortController();
+    const requestController = new AbortController();
+    controller = requestController;
+    lastAttempt = Date.now();
     loading.value = true;
-    const timeout = setTimeout(() => controller?.abort(), 15000);
+    const timeout = setTimeout(() => requestController.abort(), 15000);
     try {
-      const result = await apiRequest<Telemetry>(`/api/v1/device/${encodeURIComponent(id.value)}/telemetry`, { signal: controller.signal, cache: 'no-store' });
+      const result = await apiRequest<Telemetry>(`/api/v1/device/${encodeURIComponent(id.value)}/telemetry`, { signal: requestController.signal, cache: 'no-store' });
       if (gen === generation) {
         data.value = result.data?.sampled_at ? result.data : { ...data.value, stale: true, error: result.data?.error || 'unavailable' };
       }
@@ -53,7 +56,7 @@ export function useDeviceTelemetry(id: Ref<string>, enabled: Ref<boolean>) {
   onMounted(() => {
     document.addEventListener('visibilitychange', visibility);
     void refresh();
-    timer = setInterval(() => { now.value = Date.now(); if (!data.value.sampled_at || now.value / 1000 - data.value.sampled_at >= 15) void refresh(); }, 1000);
+    timer = setInterval(() => { now.value = Date.now(); if (now.value - lastAttempt >= 15000) void refresh(); }, 1000);
   });
   onBeforeUnmount(() => { generation++; controller?.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', visibility); });
   return { data, loading, stale, sampledTime, refresh };
