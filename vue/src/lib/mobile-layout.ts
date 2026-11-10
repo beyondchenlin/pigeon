@@ -1,4 +1,5 @@
 import { onBeforeUnmount, onMounted, ref, type Directive } from 'vue';
+import { observeViewport } from './visible-viewport.ts';
 
 export function fitDisplay(width: number, height: number, availableWidth: number, availableHeight: number) {
   if (![width, height, availableWidth, availableHeight].every(n => Number.isFinite(n) && n > 0)) return { width: 0, height: 0 };
@@ -10,14 +11,17 @@ export function galleryMediaHeight(height: number, compact: boolean, single: boo
   const chrome = compact ? 60 : 66;
   return Math.max(24, Math.floor((height - (rows - 1) * 8 - (single ? 48 : 4)) / rows - chrome));
 }
+const mobile = ref(false);
+let viewportUsers = 0;
+let stopViewport: (() => void) | undefined;
 export function useMobileViewport() {
-  const mobile = ref(window.innerWidth < 768);
-  function update() {
-    mobile.value = window.innerWidth < 768;
-    document.documentElement.style.setProperty('--bk-viewport-height', `${window.visualViewport?.height || window.innerHeight}px`);
-  }
-  onMounted(() => { update(); window.addEventListener('resize', update); window.visualViewport?.addEventListener('resize', update); });
-  onBeforeUnmount(() => { window.removeEventListener('resize', update); window.visualViewport?.removeEventListener('resize', update); });
+  onMounted(() => {
+    if (viewportUsers++ === 0) stopViewport = observeViewport(window, bounds => {
+      mobile.value = window.innerWidth < 768;
+      for (const [key, value] of Object.entries(bounds)) document.documentElement.style.setProperty(`--bk-viewport-${key}`, `${value}px`);
+    });
+  });
+  onBeforeUnmount(() => { if (--viewportUsers === 0) { stopViewport?.(); stopViewport = undefined; } });
   return mobile;
 }
 

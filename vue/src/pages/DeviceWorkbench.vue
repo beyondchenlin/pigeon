@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue';
-import { ArrowLeft, ExternalLink, RefreshCw, MoreHorizontal, Minimize2, X, Smartphone, Battery, Monitor, Cpu, Wifi, AppWindow, LockKeyhole, LockKeyholeOpen, Sun, Moon, Copy, Check, ChevronRight } from 'lucide-vue-next';
+import { ArrowLeft, ExternalLink, RefreshCw, MoreHorizontal, Maximize, Minimize, Minimize2, X, Smartphone, Battery, Monitor, Cpu, Wifi, AppWindow, LockKeyhole, LockKeyholeOpen, Sun, Moon, Copy, Check, ChevronRight } from 'lucide-vue-next';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Button } from '@/components/ui/button';
 import PhoneControl from '@/components/devices/PhoneControl.vue';
@@ -23,6 +23,32 @@ const phone = ref<InstanceType<typeof PhoneControl>>();
 const detailsElement = ref<HTMLElement>();
 const toolsOpen = ref(false), composerOpen = ref(false), switchOpen = ref(false), textBusy = ref(false);
 const actionNotice = ref('');
+const browserFullscreen = ref(false);
+const fullscreenBusy = ref(false);
+let ownsFullscreen = false;
+function fullscreenChanged() {
+  browserFullscreen.value = document.fullscreenElement === document.documentElement;
+  if (!browserFullscreen.value) { ownsFullscreen = false; controlsVisible.value = true; }
+}
+async function toggleBrowserFullscreen() {
+  if (fullscreenBusy.value) return;
+  actionNotice.value = '';
+  if (!document.fullscreenEnabled || !document.documentElement.requestFullscreen) {
+    actionNotice.value = '此浏览器暂不支持网页全屏，已按可见区域适配画面。'; return;
+  }
+  fullscreenBusy.value = true;
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else {
+      // Fullscreen the document, not just the canvas: portalled input/tool
+      // dialogs must remain usable. Must run directly from a user's click.
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      ownsFullscreen = true; controlsVisible.value = false;
+    }
+    toolsOpen.value = false;
+  } catch { actionNotice.value = '浏览器未允许全屏，请再点一次“全屏”；当前画面仍会自动适配。'; }
+  finally { fullscreenBusy.value = false; }
+}
 const availableDevices = ref<{ domain: string; comment?: string; model?: string; state: string }[]>([]);
 const switchingLoading = ref(false), switchError = ref(''), switchQuery = ref('');
 function openComposer() {
@@ -134,8 +160,8 @@ async function copyId() {
 }
 function selectTab(index: number) { const item = tabs[(index + tabs.length) % tabs.length]; if (item) { tab.value = item.id; document.getElementById(`tab-${item.id}`)?.focus(); } }
 function send(cmd: string, payload: unknown) { if (command(cmd, payload)) log(cmd === 'device/wakeup' ? '已发送唤醒指令' : '已发送手机导航指令'); }
-onMounted(() => { document.addEventListener('keydown', escapeTools); void load(); timer = setInterval(() => void load(), 15000); });
-onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); disposed = true; controller?.abort(); clearInterval(timer); clearTimeout(copyTimer); });
+onMounted(() => { document.addEventListener('keydown', escapeTools); document.addEventListener('fullscreenchange', fullscreenChanged); fullscreenChanged(); void load(); timer = setInterval(() => void load(), 15000); });
+onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); document.removeEventListener('fullscreenchange', fullscreenChanged); if (ownsFullscreen && document.fullscreenElement === document.documentElement) void document.exitFullscreen().catch(() => {}); disposed = true; controller?.abort(); clearInterval(timer); clearTimeout(copyTimer); });
 </script>
 
 <template>
@@ -150,7 +176,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); di
             <p class="mt-0.5 truncate text-xs text-muted-foreground" :title="subtitle">{{ subtitle }}</p>
           </div>
         </div>
-        <div class="header-actions"><Button size="sm" variant="ghost" :disabled="textBusy" @click="showSwitch">切换 ▾</Button><button class="hide-tools" aria-label="隐藏远控工具" @click="controlsVisible = false"><Minimize2 class="h-4 w-4" /></button></div>
+        <div class="header-actions"><Button size="sm" variant="ghost" :disabled="fullscreenBusy" :aria-label="browserFullscreen ? '退出浏览器全屏' : '进入浏览器全屏'" @click="toggleBrowserFullscreen"><component :is="browserFullscreen ? Minimize : Maximize" class="h-3.5 w-3.5" /><span>{{ browserFullscreen ? '退出全屏' : '全屏' }}</span></Button><Button size="sm" variant="ghost" :disabled="textBusy" @click="showSwitch">切换 ▾</Button><button class="hide-tools" aria-label="隐藏远控工具" @click="controlsVisible = false"><Minimize2 class="h-4 w-4" /></button></div>
       </header>
       <p v-if="recordError" role="alert" class="mx-4 mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{{ recordError }} <button class="underline" @click="load">重试</button></p>
       <div class="workbench-layout">
@@ -213,6 +239,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); di
     <p v-if="actionNotice" class="workbench-notice" role="status" @click="actionNotice = ''">{{ actionNotice }}</p>
     <PhoneComposer v-model:open="composerOpen" :device-id="id" :title="title" :connected="connected" :request="requestCommand" @busy="textBusy = $event" />
     <Dialog v-model:open="toolsOpen"><DialogContent><DialogHeader><DialogTitle>手机工具 · {{ title }}</DialogTitle></DialogHeader><div class="remote-tool-grid">
+      <Button variant="outline" :disabled="fullscreenBusy" @click="toggleBrowserFullscreen">{{ browserFullscreen ? '退出浏览器全屏' : '全屏隐藏浏览器栏' }}</Button>
       <Button variant="outline" :disabled="!connected || textBusy" @click="send('device/wakeup', []); toolsOpen = false">唤醒手机</Button>
       <Button variant="outline" @click="phone?.reconnect(); toolsOpen = false">重连画面</Button>
       <Button variant="outline" @click="showDetails">设备属性与文件</Button><Button variant="outline" @click="showSwitch">切换手机</Button>
@@ -225,7 +252,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); di
 
 <style scoped>
 .device-workbench { min-height: 100dvh; }
-.workbench-main { min-width: 0; }
+.workbench-main { position: relative; min-width: 0; }
 .workbench-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 20px; flex-shrink: 0; }
 .device-heading { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 280px; }
 .device-state { flex-shrink: 0; border-radius: 5px; padding: 2px 7px; font-size: 12px; line-height: 18px; }
@@ -287,14 +314,16 @@ button:focus-visible, a:focus-visible, summary:focus-visible, .details-scroll:fo
 <style scoped>
 .hide-tools{width:40px;height:40px;display:grid;place-items:center;border-radius:5px}.restore-tools{position:fixed;z-index:30;right:0;top:43%;width:44px;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:color-mix(in srgb,var(--background) 95%,transparent);border:1px solid var(--border);border-radius:10px 0 0 10px;font-size:10px;box-shadow:0 2px 10px #00000012}.workbench-notice{position:fixed;z-index:60;bottom:80px;left:50%;transform:translateX(-50%);width:max-content;max-width:90vw;background:var(--background);border:1px solid var(--border);border-radius:7px;padding:10px;font-size:12px}.remote-tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.remote-tool-grid>*{min-height:44px;font-size:12px}.workbench-clean .workbench-details{display:none}.workbench-clean :deep(.bk-mobile-header),.workbench-clean :deep(.bk-mobile-nav),.workbench-clean :deep(aside){display:none}.workbench-clean .workbench-main{margin-left:0;height:var(--bk-viewport-height,100dvh)}.workbench-clean .workbench-layout{display:block;height:100%;padding:0}.workbench-clean .workbench-phone{width:100%;max-width:none;height:100%;min-height:0}
 @media(max-width:767px){
- .device-workbench{height:var(--bk-viewport-height,100dvh);min-height:0;overflow:hidden}
+ .device-workbench{position:fixed;top:var(--bk-viewport-top,0px);left:var(--bk-viewport-left,0px);width:var(--bk-viewport-width,100%);height:var(--bk-viewport-height,100dvh);min-height:0;overflow:hidden}
  .device-workbench :deep(.bk-mobile-header),.device-workbench :deep(.bk-mobile-nav){display:none}
  .workbench-main{height:100%;margin:0}.workbench-layout{height:100%;display:block;padding:0}
- .workbench-phone{position:absolute;inset:0;width:100%;height:100%;max-width:none;min-height:0}
+ .workbench-phone{position:relative;width:100%;height:100%;max-width:none;min-height:0}
  .workbench-header{position:absolute;top:max(8px,env(safe-area-inset-top));left:8px;right:8px;z-index:20;gap:4px;padding:3px 5px;flex-wrap:nowrap;border:1px solid var(--border);border-radius:10px;background:color-mix(in srgb,var(--background) 95%,transparent);box-shadow:0 2px 12px #00000010}
  .device-heading{flex:1 1 0;gap:3px}.device-heading h1{font-size:12px;line-height:18px}.device-heading>div>div{gap:4px}.device-heading p{font-size:9px;max-width:47vw}.device-heading>button{width:34px;height:44px}.device-state{font-size:9px;padding:1px 3px;line-height:15px}.header-actions{margin:0;gap:2px;flex-wrap:nowrap}.header-actions button{font-size:11px;padding:4px;min-height:40px}.header-actions .hide-tools{width:32px}
- .workbench-details{position:fixed;inset:0;margin:auto;width:calc(100vw - 20px);height:calc(var(--bk-viewport-height,100dvh) - 40px);max-height:calc(var(--bk-viewport-height,100dvh) - 40px);max-width:none;padding:0;z-index:50;overflow:auto}
+ .workbench-details{position:fixed;top:calc(var(--bk-viewport-top,0px) + 20px);left:calc(var(--bk-viewport-left,0px) + 10px);right:auto;bottom:auto;margin:0;width:calc(var(--bk-viewport-width,100vw) - 20px);height:calc(var(--bk-viewport-height,100dvh) - 40px);max-height:calc(var(--bk-viewport-height,100dvh) - 40px);max-width:none;padding:0;z-index:50;overflow:auto}
  .workbench-details:not([open]){display:none}.workbench-details::backdrop{background:#0006}.workbench-details[open]{display:flex}.details-scroll{overflow:auto;flex:1;min-height:0}.details-tabs{gap:14px}.details-tabs button{font-size:12px}.details-toolbar{padding:0 10px}.status-strip{padding:10px;font-size:11px}.property-row{grid-template-columns:88px minmax(0,1fr)}
 }
+.restore-tools{top:calc(var(--bk-viewport-top,0px) + var(--bk-viewport-height,100dvh)*.43);right:var(--bk-viewport-right,0px)}
+.workbench-notice{bottom:calc(var(--bk-viewport-bottom,0px) + 80px)}
 @media(min-width:768px) and (max-width:1199px){.device-workbench{height:var(--bk-viewport-height,100dvh)}.workbench-main{height:100%;display:flex;flex-direction:column}.workbench-layout{flex:1;min-height:0;grid-template-columns:minmax(220px,40%) minmax(0,1fr)}.workbench-phone{height:100%;min-height:0}.details-scroll{overflow:auto;flex:1}.workbench-clean{padding:0}}
 </style>
