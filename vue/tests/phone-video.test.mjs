@@ -229,3 +229,11 @@ test('late idle detail is discarded after interaction, successful detail clears 
   t.mock.timers.tick(11000);s.snapshots[1].resolve(new Blob(['fresh']));await flush();
   assert.equal(s.details.at(-1),true);s.stop.interact();assert.equal(s.details.at(-1),false);assert.equal(closed,2);
 });
+
+test('detail expires even if a small remote update escapes motion detection',async t=>{
+  const s=setup(t,true,{mounted:true}),v=s.videos[0];
+  t.mock.method(globalThis,'createImageBitmap',async()=>({width:720,height:1592,close(){}}));
+  s.peers[0].ontrack({track:{kind:'video'},streams:[{}],receiver:{}});v.emit();
+  t.mock.timers.tick(11000);s.snapshots[0].resolve(new Blob(['still']));await flush();
+  assert.equal(s.details.at(-1),true);t.mock.timers.tick(2000);assert.equal(s.details.at(-1),false);
+});

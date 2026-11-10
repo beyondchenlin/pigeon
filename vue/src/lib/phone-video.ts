@@ -193,22 +193,26 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
   let retry: ReturnType<typeof setTimeout> | undefined, attempts = 0, connectedAt = 0, upgrading = false;
   const policy=new VideoPolicy(),preference=o.preference??DEFAULT_VIDEO;
   let lastInteraction=performance.now(),lastMotion=performance.now(),sampled=0,signature:Uint8ClampedArray|undefined;
-  let detail=false,stillBusy=false,stillAbort:AbortController|undefined,stillVersion=0,lastStillAttempt=0;
-  const probe=document.createElement('canvas');probe.width=24;probe.height=48;
+  let detail=false,detailAt=0,stillBusy=false,stillAbort:AbortController|undefined,stillVersion=0,lastStillAttempt=0;
+  const probeWidth=64,probeHeight=144;
+  const probe=document.createElement('canvas');probe.width=probeWidth;probe.height=probeHeight;
   const probeContext=probe.getContext?.('2d',{willReadFrequently:true});
   const clearDetail=()=>{stillVersion++;stillAbort?.abort();if(detail){detail=false;o.detail?.(false);o.canvas.getContext('2d')?.clearRect(0,0,o.canvas.width,o.canvas.height);}};
   const interact=()=>{lastInteraction=performance.now();clearDetail();};
   const inspectFrame=(video:HTMLVideoElement)=>{
     const now=performance.now();
     if(!probeContext||now-sampled<400)return;
-    sampled=now;probeContext.drawImage(video,0,0,24,48);
-    const pixels=probeContext.getImageData(0,0,24,48).data;
+    sampled=now;probeContext.drawImage(video,0,0,probeWidth,probeHeight);
+    const pixels=probeContext.getImageData(0,0,probeWidth,probeHeight).data;
     let changed=0;for(let i=0;signature&&i<pixels.length;i+=4)if(Math.abs(pixels[i]!-signature[i]!)+Math.abs(pixels[i+1]!-signature[i+1]!)+Math.abs(pixels[i+2]!-signature[i+2]!)>45)changed++;
-    if(!signature||changed>8){lastMotion=now;clearDetail();}
+    if(!signature||changed>2){lastMotion=now;clearDetail();}
     signature=pixels;
   };
   const stillTimer=setInterval(()=>{
     const now=performance.now();
+    // Even a tiny notification below the motion detector's threshold must not
+    // remain hidden behind a stale screenshot. Live video remains underneath.
+    if(detail&&now-detailAt>=2000)clearDetail();
     if(disposed||!connectedAt||preference.resolution!=='auto'||!o.snapshot||!o.video||detail||stillBusy||now-Math.max(lastInteraction,lastMotion)<5000||now-lastStillAttempt<10000)return;
     stillBusy=true;lastStillAttempt=now;const version=stillVersion;stillAbort=new AbortController();
     const deadline=setTimeout(()=>stillAbort?.abort(),6000);
@@ -217,7 +221,7 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
         if(disposed||version!==stillVersion||!connectedAt)return;
         // Never cover a changed or interacted-with screen with a late still.
         o.canvas.width=image.width;o.canvas.height=image.height;o.canvas.getContext('2d')?.drawImage(image,0,0);
-        detail=true;o.detail?.(true);o.frame(image.width,image.height);
+        detail=true;detailAt=performance.now();o.detail?.(true);o.frame(image.width,image.height);
       } finally {image.close();}
     }).catch(()=>{}).finally(()=>{clearTimeout(deadline);stillBusy=false;});
   },500);
