@@ -15,6 +15,7 @@ export type VideoOptions = {
   mode: (mode: VideoMode) => void;
   log: (message: string) => void;
   stats?: (value: { rttMs: number | null; path: string; decoded: number; dropped: number }) => void;
+  inputChannel?: (channel: RTCDataChannel) => void;
 };
 
 type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers' | 'video'> & {
@@ -22,6 +23,7 @@ type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers' | 'video'> & {
   ready: () => void;
   failed: (reason: string) => void;
   stats?: VideoOptions['stats'];
+  inputChannel?: VideoOptions['inputChannel'];
 };
 
 /** One RTC attempt; its cleanup also invalidates every outstanding async callback. */
@@ -70,6 +72,9 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   try {
     const iceServers = o.iceServers ?? [{ urls: 'stun:stun.device-farm.com' }];
     pc = new RTCPeerConnection({ iceServers });
+    // Same authenticated peer and DTLS session as video. Phones without the
+    // BK receiver never send capability/ready, so native WSS remains active.
+    if (o.inputChannel) o.inputChannel(pc.createDataChannel('bk-touch-v1', { ordered: true, protocol: 'bk.touch.v1' }));
     video = o.video ?? document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true;
     pc.ontrack = e => {
       if (closed || !video || e.track.kind !== 'video') return;
@@ -214,7 +219,7 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
       catch { if (!disposed) o.log('中转配置暂不可用，继续尝试直连'); }
     }
     if (disposed) return;
-    rtc = startRtcVideo({ url: o.url, iceServers, video: o.video, stats: o.stats,
+    rtc = startRtcVideo({ url: o.url, iceServers, video: o.video, stats: o.stats, inputChannel: o.inputChannel,
       ready: () => { if (disposed) return; upgrading = false; connectedAt = Date.now(); socket?.(); socket = undefined; o.mode('webrtc'); o.log('已切换 WebRTC 视频'); },
       frame: video => {
         if (disposed) return;

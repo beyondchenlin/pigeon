@@ -18,6 +18,7 @@ function setup(t, combined = false, extra = {}) {
   class Peer {
     constructor() { this.calls = []; this.connectionState = this.iceConnectionState = 'new'; this.stopped = 0; peers.push(this); }
     async createOffer() { return { type: 'offer', sdp: 'test' }; }
+    createDataChannel(label, options) { this.channel = { label, ...options }; this.calls.push('datachannel'); return this.channel; }
     async setLocalDescription() {}
     async setRemoteDescription() { this.calls.push('answer'); }
     async addIceCandidate(c) { this.calls.push(c ? 'candidate' : 'complete'); }
@@ -51,6 +52,16 @@ test('keeps fallback until a real drawable RTC frame arrives', async t => {
   s.videos[0].emit(); assert.equal(s.ready, 1); assert.equal(s.frames.length, 1);
   s.videos[0].emit(); assert.equal(s.ready, 1);
   t.mock.timers.tick(13000); assert.deepEqual(s.failures, []);
+});
+
+test('touch data channel is negotiated on the video peer before its offer', async t => {
+  const channels = [], s = setup(t, true, { inputChannel: c => channels.push(c) });
+  assert.equal(channels.length, 1);
+  assert.equal(channels[0], s.peers[0].channel);
+  assert.deepEqual(channels[0], { label: 'bk-touch-v1', ordered: true, protocol: 'bk.touch.v1' });
+  s.sockets[0].open(); await flush();
+  assert.equal(s.sockets[0].sent[0].type, 'request-offer');
+  s.stop(); assert.equal(s.peers[0].closed, true);
 });
 
 test('mounted RTC presents without canvas copies, retains dimensions and releases the stream', t => {

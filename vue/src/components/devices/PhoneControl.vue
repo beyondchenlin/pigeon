@@ -7,6 +7,7 @@ import { androidKey, createPhoneInput, type PhoneRequest } from '@/lib/phone-inp
 import { apiRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { fitDisplay } from '@/lib/mobile-layout';
+import { createPhoneTouch, type TouchPayload } from '@/lib/phone-touch';
 
 const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean }>();
 const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string]; 'hide-tools': []; compose: []; tools: [] }>();
@@ -58,56 +59,44 @@ const canvasStyle = computed(() => {
 });
 const enabled = computed(() => props.online && visible.value && !paused.value);
 let dispose: ReturnType<typeof startPhoneVideo> | undefined;
-let recoverTouch: (() => void) | undefined;
-let retry: ReturnType<typeof setTimeout> | undefined;
-let touch: WebSocket | undefined;
+let touch: ReturnType<typeof createPhoneTouch> | undefined;
+const inputTransport = ref('none');
+const inputRtt = ref<number | null>(null);
 let dimensions = { width: 0, height: 0 };
 let pointer: number | null = null;
 let generation = 0;
-let touchDispose: (() => void) | undefined;
 let frameTimer: ReturnType<typeof setInterval> | undefined;
 let moveRaf = 0;
 let lastMove: PointerEvent | undefined;
 
 function release() {
   cancelAnimationFrame(moveRaf); moveRaf = 0; lastMove = undefined;
-  if (pointer !== null && touch?.readyState === WebSocket.OPEN) touch.send(JSON.stringify({ action: 'up', id: 0 }));
+  if (pointer !== null) touch?.send({ action: 'up', id: 0 });
   pointer = null;
 }
 function stop() {
-  generation++; release(); blurInput(); clearTimeout(retry); clearInterval(frameTimer);
-  touchDispose?.(); touchDispose = undefined; dispose?.(); dispose = undefined;
-  touch = undefined; recoverTouch = undefined; touchReady.value = false; fps.value = 0; mediaRtt.value = null; mediaPath.value = 'unknown';
+  generation++; release(); blurInput(); clearInterval(frameTimer);
+  touch?.close(); dispose?.(); dispose = undefined;
+  touch = undefined; touchReady.value = false; fps.value = 0; mediaRtt.value = null; mediaPath.value = 'unknown';
+  inputTransport.value = 'none'; inputRtt.value = null;
 }
 function start() {
   stop();
   if (!enabled.value || !canvas.value) { state.value = 'paused'; return; }
   const own = generation;
-  let count = 0, measured = performance.now(), touchAttempts = 0;
+  let count = 0, measured = performance.now();
   const valid = () => own === generation && enabled.value;
-  const connectTouch = () => {
-    if (!valid()) return;
-    touchDispose?.();
-    const ws = new WebSocket(deviceSocket(props.deviceId, '/ws/screen/touch')); touch = ws;
-    let closed = false;
-    let handshake: ReturnType<typeof setTimeout> | undefined;
-    touchDispose = () => { closed = true; clearTimeout(handshake); ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); };
-    const recover = () => {
-      if (closed || !valid()) return; release(); touchReady.value = false; touchDispose?.();
-      emit('log', '触控通道中断，正在恢复');
-      retry = setTimeout(connectTouch, touchAttempts++ < 15 ? 1000 : 5000);
-    };
-    ws.onopen = () => { if (valid()) ws.send(JSON.stringify({ action: 'reset' })); };
-    ws.onmessage = e => { if (!valid()) return; try { const m = JSON.parse(e.data); if (m.type === 'OK' && m.w > 0 && m.h > 0) { clearTimeout(handshake); dimensions = { width: m.w, height: m.h }; touchReady.value = true; touchAttempts = 0; } } catch {} };
-    ws.onclose = ws.onerror = recover;
-    handshake = setTimeout(recover, 5000);
-  };
-  recoverTouch = () => { if (!touchReady.value) { clearTimeout(retry); connectTouch(); } };
-  connectTouch();
+  touch = createPhoneTouch({ url: deviceSocket(props.deviceId, '/ws/screen/touch'),
+    ready: (ready, size) => { if (valid()) { touchReady.value = ready; if (size) dimensions = size; } },
+    lost: () => { cancelAnimationFrame(moveRaf); moveRaf = 0; lastMove = undefined; pointer = null; },
+    log: message => { if (valid()) emit('log', message); },
+    stats: (route, rtt) => { if (valid()) { inputTransport.value = route; inputRtt.value = rtt; } }
+  });
   dispose = startPhoneVideo({
     url: path => deviceSocket(props.deviceId, path), canvas: canvas.value, video: nativeVideo ? video.value : undefined,
     decoderUrl: new URL(`/d/${encodeURIComponent(props.deviceId)}/static/js/decoder.js`, location.href).href,
     webrtc: new URLSearchParams(location.search).get('transport') !== 'ws',
+    inputChannel: channel => { if (valid() && touch) touch.attach(channel); else channel.close(); },
     loadIceServers: async () => {
       const response = await apiRequest<{ iceServers: RTCIceServer[] }>(`/api/v1/device/${encodeURIComponent(props.deviceId)}/ice`, { signal: AbortSignal.timeout(3000) });
       return response.data?.iceServers ?? [];
@@ -120,9 +109,9 @@ function start() {
   });
   frameTimer = setInterval(() => { const now = performance.now(); fps.value = Math.round(count * 1000 / (now - measured)); measured = now; count = 0; }, 2000);
 }
-function send(action: string, event?: PointerEvent) {
-  if (!touchReady.value || touch?.readyState !== WebSocket.OPEN || state.value !== 'live') return false;
-  let payload: Record<string, unknown> = { action, id: 0 };
+function send(action: TouchPayload['action'], event?: PointerEvent) {
+  if (!touchReady.value || !touch || state.value !== 'live') return false;
+  let payload: TouchPayload = { action, id: 0 };
   if (event && canvas.value) {
     const rect = canvas.value.getBoundingClientRect();
     const u = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
@@ -131,7 +120,7 @@ function send(action: string, event?: PointerEvent) {
     const [x, y] = rot === 1 ? [1-v, u] : rot === 2 ? [1-u, 1-v] : rot === 3 ? [v, 1-u] : [u, v];
     payload = { ...payload, x: Math.min(dimensions.width - 1, Math.floor(x * dimensions.width)), y: Math.min(dimensions.height - 1, Math.floor(y * dimensions.height)) };
   }
-  touch.send(JSON.stringify(payload)); return true;
+  return touch.send(payload);
 }
 function down(e: PointerEvent) {
   if (e.button !== 0 || pointer !== null) return;
@@ -172,7 +161,7 @@ watch(() => props.rotation, start);
 let wasConnected = false;
 watch(() => props.commandReady, ready => {
   if (!ready) { blurInput(); return; }
-  if (wasConnected) { recoverTouch?.(); dispose?.recover(); }
+  if (wasConnected) { touch?.recover(); dispose?.recover(); }
   wasConnected = true;
 });
 onMounted(() => {
@@ -198,7 +187,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
         <button v-if="canFullscreen" class="screen-action" :title="fullscreen ? '退出全屏' : '全屏查看'" :aria-label="fullscreen ? '退出全屏' : '全屏查看'" @click="toggleFullscreen"><component :is="fullscreen ? Minimize : Maximize" class="h-4 w-4" /></button>
       </div>
     </div>
-    <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-background" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath">
+    <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-background" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath" :data-input-transport="inputTransport" :data-input-rtt="inputRtt">
       <video ref="video" :style="canvasStyle" class="rtc-video" :class="{ 'rtc-visible': nativeVideo && mode === 'webrtc' && state === 'live' }" autoplay muted playsinline disablepictureinpicture aria-hidden="true" />
       <canvas ref="canvas" :style="canvasStyle" :class="{ 'rtc-input': nativeVideo && mode === 'webrtc' && state === 'live' }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
       <textarea ref="keyboard" class="phone-keyboard" aria-label="手机文字输入" autocomplete="off" autocapitalize="off" :spellcheck="false" inputmode="none" @keydown="keyboardDown" @input="inputText" @compositionstart="composing = true" @compositionend="composing = false; inputText()" @paste="paste" @blur="blurInput" />
