@@ -14,7 +14,7 @@
 
 ## 网络配置
 
-当前网络实测 ICE 直连探测无响应，因此补充自建 coturn。`/api/v1/device/{id}/ice` 在校验登录和设备权限后发放一小时有效的 HMAC 凭据，禁止缓存；共享密钥只保存在服务器。每次 WebRTC 重试重新获取配置，接口超时仍保留 WSS 并尝试直连。媒体优先选择可用直连，受限网络通过 TURN 中转，全部失败时回退鉴权 WSS。
+接入初期的 Wi-Fi 网络实测 ICE 直连探测无响应，因此补充自建 coturn；后续移动网络验收成功使用 UDP 直连，不能把早期失败推广到所有网络。`/api/v1/device/{id}/ice` 在校验登录和设备权限后发放一小时有效的 HMAC 凭据，禁止缓存；共享密钥只保存在服务器。每次 WebRTC 重试重新获取配置，接口超时仍保留 WSS 并尝试直连。媒体优先选择可用直连，受限网络通过 TURN 中转，全部失败时回退鉴权 WSS。
 
 现有香港服务器运行独立 `bk-turn.service`，开放 TCP / UDP 3478 和 UDP 49160–49200；禁用匿名中转、TCP peer relay、内网 / 环回 / 组播目标，限制会话及带宽。不会启动 STF 应用。`ops/install_bk_turn.py` 记录部署配置；只重启 API worker 注册新接口，不重启手机服务或整个 PIGEON 栈。TURN 目前使用 UDP 或 TCP 入口，媒体仍由 WebRTC DTLS-SRTP 加密；不宣称已经覆盖只允许 TLS 443 的极端网络。
 
