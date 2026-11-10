@@ -1,4 +1,4 @@
-"""Bridge FIRERPA's xfrpc CLI to the pinned official Android FRP client.
+"""Bridge FIRERPA's xfrpc CLI to the pinned BK Android FRP client.
 
 Executed by the existing FIRERPA supervisor; it does not start another daemon,
 change credentials, or restart the phone. The native client owns reconnection.
@@ -15,9 +15,9 @@ def recovery_config(source):
     """Preserve native identity/proxies; bound detection of dead mobile TCP paths."""
     config = tomllib.loads(Path(source).read_text())
     transport = config.setdefault('transport', {})
-    # Dedicated TCP streams prevent a blocked multiplexed data stream delaying
-    # control teardown. The paired BK frps must also set tcpMux=false.
-    transport.update(tcpMux=False, tcpMuxKeepaliveInterval=5, heartbeatInterval=3,
+    # Keep native-client protocol compatibility; bounded retries and live-path
+    # detection do not require disabling multiplexing fleet-wide.
+    transport.update(tcpMux=True, tcpMuxKeepaliveInterval=5, heartbeatInterval=3,
                      heartbeatTimeout=10, dialServerTimeout=3, dialServerKeepAlive=5)
     config['loginFailExit'] = False
     return config
@@ -65,7 +65,7 @@ def official_args(argv):
 
 
 def main():
-    binary = Path(os.environ['USRDIR']) / 'phone-pilot/frpc-0.72.0-android-arm64'
+    binary = Path(os.environ['USRDIR']) / 'phone-pilot/frpc-0.72.0-bk.1-android-arm64'
     args = official_args(sys.argv[1:])
     if '-c' in args:
         index = args.index('-c') + 1

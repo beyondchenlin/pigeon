@@ -8,8 +8,6 @@ quicBindPort = ${FWD_PORT:-7000}
 proxyBindAddr = "127.0.0.1"
 
 transport.maxPoolCount = 16
-transport.tcpMux = false
-transport.heartbeatTimeout = 15
 
 transport.tls.force = true
 

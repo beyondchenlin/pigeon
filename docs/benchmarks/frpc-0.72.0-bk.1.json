@@ -1,0 +1,10 @@
+{
+  "version": "0.72.0-bk.1",
+  "module": "github.com/fatedier/frp@v0.72.0",
+  "module_sum": "h1:BP0T6a0gdCqQoFP3iKngQMUtiTcHwvEGKtTb+uNYvaA=",
+  "upstream_commit": "bafec21abce5f91ae4a05b4bd19c55543c263128",
+  "go": "go version go1.26.4 windows/amd64",
+  "sha256": "c31826e2f29b2efacf97577b15e7d7e5937ab5d4a72815343c22bb275c57432c",
+  "bytes": 16777512,
+  "policy": "reconnect backoff cap 3s; existing jitter retained"
+}

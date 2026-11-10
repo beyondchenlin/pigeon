@@ -5,11 +5,23 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from ops.bk_frpc_adapter import official_args, main, recovery_config
-from ops.install_bk_frpc import atomic, sha
+from ops.install_bk_frpc import atomic, sha, activate
 from ops.install_bk_frps import linux_shell
 
 
 class ForwardingAdapterTests(unittest.TestCase):
+    def test_activation_waits_for_a_new_pid_when_restarting_same_version(self):
+        from types import SimpleNamespace
+        with patch('ops.install_bk_frpc.Path') as path, \
+                patch('ops.install_bk_frpc.os.kill') as kill, \
+                patch('ops.install_bk_frpc.time.sleep') as sleep, \
+                patch('ops.install_bk_frpc.process_ids', side_effect=[[11],[22]]):
+            path.return_value.stat.return_value = SimpleNamespace(st_uid=2000)
+            path.return_value.joinpath.return_value.stat.return_value = SimpleNamespace(st_dev=2,st_ino=3)
+            activate((11,2,3), '/verified-client')
+            kill.assert_called_once()
+            sleep.assert_called_once_with(1)
+
     def test_windows_checkout_shell_is_executable_on_linux(self):
         self.assertEqual(linux_shell(b'#!/bin/sh\r\nexec "$@"\r\n'), b'#!/bin/sh\nexec "$@"\n')
         with self.assertRaises(ValueError):linux_shell(b'not a shell script')
@@ -34,7 +46,7 @@ class ForwardingAdapterTests(unittest.TestCase):
                 patch('ops.bk_frpc_adapter.write_recovery_config', return_value='/derived.json') as derive, \
                 patch('os.execv') as execute:
             main()
-        binary=str(Path('/data/local/tmp/usr')/'phone-pilot/frpc-0.72.0-android-arm64')
+        binary=str(Path('/data/local/tmp/usr')/'phone-pilot/frpc-0.72.0-bk.1-android-arm64')
         derive.assert_called_once()
         execute.assert_called_once_with(binary, [binary, '-c', '/derived.json'])
 
@@ -49,7 +61,7 @@ class ForwardingAdapterTests(unittest.TestCase):
             self.assertEqual(c['proxies'][0]['localPort'],1234)
             self.assertTrue(c['transport']['tls']['enable'])
             self.assertEqual(c['transport']['heartbeatTimeout'],10)
-            self.assertFalse(c['transport']['tcpMux'])
+            self.assertTrue(c['transport']['tcpMux'])
             self.assertFalse(c['loginFailExit'])
             self.assertEqual(p.read_text(), original)
 

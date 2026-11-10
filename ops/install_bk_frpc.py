@@ -1,4 +1,4 @@
-"""Install/rollback the official forwarding client on an authorized shell device.
+"""Install/rollback the pinned BK forwarding client on an authorized shell device.
 
 Stage the verified Android ARM64 release and bk_frpc_adapter.py first. No network
 download, configuration/credential copying, root, or whole-service restart here.
@@ -14,9 +14,8 @@ import signal
 import subprocess
 import time
 
-VERSION = '0.72.0'
-BINARY_SHA256 = '91903d357130ea6da101c056d1795c7b6d5a832baa8bee4be63d396859e20d62'
-ARCHIVE_SHA256 = '096ef4ab7c89ce8893713eaad644fa1b6462ac97d2ae97b5a47890e0780ba3d4'
+VERSION = '0.72.0-bk.1'
+BINARY_SHA256 = 'c31826e2f29b2efacf97577b15e7d7e5937ab5d4a72815343c22bb275c57432c'
 
 
 def sha(path):
@@ -71,7 +70,8 @@ def activate(identity, new_executable):
     os.kill(pid, signal.SIGTERM)
     until = time.monotonic() + 40
     while time.monotonic() < until:
-        if len(process_ids(new_executable)) == 1:
+        active = process_ids(new_executable)
+        if len(active) == 1 and active[0] != pid:
             return
         time.sleep(1)
     raise RuntimeError('FIRERPA did not respawn the forwarding child; rollback available')
@@ -136,13 +136,17 @@ def main():
         manifest['installed'] = False
     else:
         if sha(binary) != BINARY_SHA256 or not adapter.is_file():
-            raise RuntimeError('Missing adapter or unverified official binary')
+            raise RuntimeError('Missing adapter or unverified BK binary')
         binary.chmod(0o700)
         config = usr / '.local/run/fwd.toml'
         result = subprocess.run([str(binary), 'verify', '-c', str(config)], capture_output=True, timeout=15)
         if result.returncode:
             raise RuntimeError('Native forwarding configuration is not compatible')
-        identity = capture_process(entry) if args.activate and not process_ids(binary) else None
+        identity = None
+        if args.activate:
+            # An earlier BK release runs its own binary, not the xfrpc launcher.
+            previous = task / ('frpc-' + manifest['version'] + '-android-arm64') if manifest.get('installed') else entry
+            identity = capture_process(previous)
         launcher = ('#!/system/bin/sh\n# BK_OFFICIAL_FRPC_ADAPTER\nexec ' +
                     shlex.quote(str(root / 'bin/python3')) + ' ' + shlex.quote(str(adapter)) + ' "$@"\n')
         atomic(entry, launcher.encode())
