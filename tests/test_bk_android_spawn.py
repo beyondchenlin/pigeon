@@ -2,7 +2,15 @@ import unittest
 import os
 from pathlib import Path
 from unittest.mock import patch
-from ops.bk_android_spawn import media_argv
+from ops.bk_android_spawn import media_argv, MediaProcess
+
+class AlreadyReapedTests(unittest.IsolatedAsyncioTestCase):
+    async def test_host_reaper_does_not_leave_waiter_or_signal_reused_pid(self):
+        process=MediaProcess(12345)
+        with patch('ops.bk_android_spawn.signal.SIGKILL',9,create=True),patch('ops.bk_android_spawn.os.WNOHANG',1,create=True),patch('ops.bk_android_spawn.os.waitpid',side_effect=ChildProcessError),patch('ops.bk_android_spawn.os.kill') as kill:
+            self.assertEqual(await process.wait(),-255)
+            self.assertEqual(await process.wait(),-255)
+            process.terminate();process.kill();kill.assert_not_called()
 
 
 class NativeCommandTests(unittest.TestCase):

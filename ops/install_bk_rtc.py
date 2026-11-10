@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import tempfile
 
-FILES = {'bk_rtc_core.py': 'bk_rtc_core.py', 'bk_android_spawn.py': 'bk_android_spawn.py',
+FILES = {'bk_rtc_core.py': 'bk_rtc_core.py', 'bk_android_spawn.py': 'bk_android_spawn.py', 'bk_forward_runtime.py':'bk_forward_runtime.py',
          'bk_rtc_extension.py': 'extension/bk_rtc_extension.py'}
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()

@@ -106,7 +106,14 @@ class MediaProcess:
         if self._waiter is None:
             async def reap():
                 while True:
-                    pid, status = os.waitpid(self.pid, os.WNOHANG)
+                    try:
+                        pid, status = os.waitpid(self.pid, os.WNOHANG)
+                    except ChildProcessError:
+                        # The host supervisor's SIGCHLD handler may reap an
+                        # unregistered media child before this waiter. The child
+                        # is gone; never signal a reused PID or await it forever.
+                        self.returncode = -255  # Exit status unavailable, not success.
+                        return self.returncode
                     if pid:
                         self.returncode = os.waitstatus_to_exitcode(status)
                         return self.returncode

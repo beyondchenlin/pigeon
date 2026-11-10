@@ -27,6 +27,10 @@ _sessions = weakref.WeakSet()
 _readers = weakref.WeakSet()
 _events = deque(maxlen=60)
 _counters = dict(spawns=0, stops=0, spawn_errors=0, input_sessions=0, input_messages=0, rejected=0)
+_media_metrics = dict(access_units=0, bytes=0, last_emit=0, pts_us=None,
+                      capture_age_ms=None, max_capture_age_ms=0, sender_frames=0,
+                      last_send=0, sender_wait_ms=0)
+_forwarding = {'state':'not-configured'}
 log = logging.getLogger('bk.rtc')
 
 
@@ -60,7 +64,7 @@ class TouchBridge:
             self.tasks.discard(task)
             if not task.cancelled() and task.exception():
                 record('input-task-error', kind=type(task.exception()).__name__)
-                self.close()
+                self.close('task-error')
         task.add_done_callback(done)
         return task
 
@@ -81,7 +85,7 @@ class TouchBridge:
                 self.send({'type': 'pong', 'id': m.get('id')}); return
             if m.get('type') == 'claim' and not self.claiming:
                 self.claiming = True; self.task(self.connect()); return
-            if m.get('type') == 'release': self.close(); return
+            if m.get('type') == 'release': self.close('client-release'); return
             if m.get('type') != 'touch' or self.socket is None: raise ValueError('Not ready')
             payload = self.protocol.validate(m)
             self.queue.put_nowait((time.monotonic(), m['seq'], payload))
@@ -147,9 +151,9 @@ class TouchBridge:
         while not self.closed:
             await asyncio.sleep(.5)
             if time.monotonic() - self.last_seen > 2.5:
-                self.close()
+                self.close('lease-expired')
 
-    def close(self):
+    def close(self, reason='channel-closed'):
         if self.closed: return
         self.closed = True
         for task in list(self.tasks):
@@ -162,7 +166,7 @@ class TouchBridge:
             self.socket.close(); self.socket = None
         self.channel.close()
         _sessions.discard(self)
-        record('input-closed')
+        record('input-closed', reason=reason)
 
 
 def install():
@@ -202,14 +206,15 @@ def install():
                 bridges.append(TouchBridge(owner, channel))
             @self.on('connectionstatechange')
             def state():
+                record('peer-state', state=self.connectionState)
                 if self.connectionState in ('closed', 'failed'):
-                    for bridge in bridges: bridge.close()
+                    for bridge in bridges: bridge.close('peer-'+self.connectionState)
     media.RTCPeerConnection = Peer
 
     original_close = bundle.SignalingWebSocketHandler.on_close
     def signaling_close(owner):
         for bridge in list(_sessions):
-            if bridge.owner is owner: bridge.close()
+            if bridge.owner is owner: bridge.close('signaling-closed')
         return original_close(owner)
     bundle.SignalingWebSocketHandler.on_close = signaling_close
 
@@ -279,6 +284,43 @@ def install():
         self._packet_queue = FreshPacketQueue(prepare=prepare)
         _readers.add(self)
     media.H264Reader.__init__ = reader_init
+    original_emit = media.H264Reader._emit_packet
+    def emit_packet(self, payload, pts_us):
+        now = time.monotonic()
+        _media_metrics.update(access_units=_media_metrics['access_units']+1,
+                              bytes=_media_metrics['bytes']+len(payload), last_emit=round(now, 3), pts_us=pts_us)
+        # Android MediaCodec uses monotonic microseconds. Reject other clock
+        # domains instead of reporting a misleading capture latency.
+        age = (now - pts_us/1e6)*1000 if isinstance(pts_us, (int, float)) else -1
+        if 0 <= age < 60000:
+            _media_metrics['capture_age_ms'] = round(age, 2)
+            _media_metrics['max_capture_age_ms'] = round(max(age, _media_metrics['max_capture_age_ms']), 2)
+        return original_emit(self, payload, pts_us)
+    media.H264Reader._emit_packet = emit_packet
+    from aiortc.rtcrtpsender import RTCRtpSender
+    original_next = RTCRtpSender._next_encoded_frame
+    async def next_frame(self, codec):
+        begin = time.monotonic()
+        result = await original_next(self, codec)
+        if self.kind == 'video' and result is not None:
+            _media_metrics.update(sender_frames=_media_metrics['sender_frames']+1,
+                                  last_send=round(time.monotonic(), 3),
+                                  sender_wait_ms=round((time.monotonic()-begin)*1000, 2))
+        return result
+    RTCRtpSender._next_encoded_frame = next_frame
+    # Reapply after the native generator has written service configs. Only the
+    # owned fwd program is reconfigured; no recurring restarts or binary edits.
+    from tornado.ioloop import IOLoop
+    async def forwarding():
+        try:
+            from bk_forward_runtime import configure
+            from lamda.globals import supervisor
+            _forwarding['state']=await asyncio.to_thread(configure,supervisor,os.environ['USRDIR'])
+            record('forwarding-configured')
+        except FileNotFoundError:_forwarding['state']='not-installed'
+        except Exception as error:
+            _forwarding['state']='configuration-failed';record('forwarding-error',kind=type(error).__name__)
+    IOLoop.current().call_later(3,lambda:asyncio.create_task(forwarding()))
     _installed = True
     record('installed', version=VERSION, pid=os.getpid(), uid=os.getuid())
 
@@ -294,5 +336,5 @@ class BkRtcExtension(BaseHttpExtension):
 
     def http_get(self):
         self.write_json(dict(version=VERSION, installed=_installed, uid=os.getuid(), pid=os.getpid(),
-            counters=_counters, input_sessions=len(_sessions), readers=[dict(depth=r._packet_queue.qsize(),
+            counters=_counters, media=_media_metrics, forwarding=_forwarding, input_sessions=len(_sessions), readers=[dict(depth=r._packet_queue.qsize(),
             discarded=r._packet_queue.discarded) for r in _readers], events=list(_events)))
