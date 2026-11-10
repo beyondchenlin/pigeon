@@ -1,0 +1,93 @@
+{
+  "revision": "2c0f4f213ba506d99745b519d653f4f3a08d0910",
+  "branch": "dev",
+  "method": "Browser input up dispatch to first correct-color decoded frame, not physical display latency. Test page uses synthetic colors; no real account actions.",
+  "network": {
+    "wifi": "0",
+    "mobile": "1",
+    "network": "NR_SA,Unknown",
+    "uid": 2000
+  },
+  "normal_p2p": {
+    "count": 13,
+    "min_ms": 137.2,
+    "median_ms": 167.1,
+    "p95_nearest_rank_ms": 281.1,
+    "max_ms": 281.1
+  },
+  "wss_input_with_webrtc_video": {
+    "count": 17,
+    "min_ms": 439.4,
+    "median_ms": 471,
+    "p95_nearest_rank_ms": 3504.7,
+    "max_ms": 3504.7
+  },
+  "attempted_interactions": 31,
+  "completed_response_samples": 30,
+  "interrupted_gestures": [
+    {
+      "i": 3,
+      "error": "page.waitForFunction timed out after 6000ms on page p1; last URL was \"https://dongfengqi.top/d/umdax0nurk9o/\"; last title was \"BK缇ゆ帶\"."
+    }
+  ],
+  "notes": [
+    "One P2P gesture lost acknowledgements; channel safely closed and WSS fallback resumed. It did not automatically regain P2P in this session. This remains unresolved.",
+    "WSS input had two >3s responses. No claim of uniformly low latency.",
+    "Video retained the same connected peer throughout the post-fault observation; no media respawn."
+  ],
+  "continuous": {
+    "seconds": 309.852,
+    "health_samples": 272,
+    "health_errors": 0,
+    "main_pids": [
+      9209
+    ],
+    "media_spawn_counters": [
+      228
+    ],
+    "video_modes": [
+      "webrtc"
+    ],
+    "final_input_route": "wss",
+    "peers": [
+      "connected"
+    ]
+  },
+  "fault_injection": {
+    "encoder_pause_seconds": 7,
+    "input_ack_ms": 70.5,
+    "decoded_response_ms": 4902.3,
+    "fresh_screenshot_ms": 5762.9,
+    "peer_states_after_recovery": [
+      "connected"
+    ],
+    "same_main_pid": 9209,
+    "warning": "Pause duration matches baseline but input timing differs; do not infer an exact speedup ratio."
+  },
+  "validation": {
+    "frontend_tests_passed": 59,
+    "typecheck": true,
+    "production_build": true,
+    "frontend_hash_comparison": {
+      "revision": "2c0f4f213ba506d99745b519d653f4f3a08d0910",
+      "files_compared": 102,
+      "differences": [],
+      "extra": [
+        "release.json"
+      ],
+      "remote_release": {
+        "revision": "2c0f4f213ba506d99745b519d653f4f3a08d0910",
+        "branch": "dev",
+        "archive_sha256": "9020d77402a0c39fd2670d2cc5e613618ec906830935b3586e942f2834848451"
+      },
+      "css": {
+        "static/css/chunk-d5075fde.css": "8699a700e6ccdb678d57144bc13cabd5722d210b06fdbc7965eacf6317e8028d"
+      }
+    }
+  },
+  "remaining": [
+    "Native external encoder cannot be forced to emit an IDR through aiortc Packet PLI alone. Bounded fresh screenshots recover visibility.",
+    "The cloud screenshot fallback still incurs transport/capture delay (about 4s in fault trials).",
+    "P2P input acknowledgement loss currently falls back to WSS until a new session; investigate separate data-channel recovery without interrupting video."
+  ]
+}
