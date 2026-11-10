@@ -1,0 +1,16 @@
+# This directory archives reviewed deployment code/configuration only.
+.env
+.env.*
+data/
+secrets/
+certs/
+*.key
+*.pem
+*.p12
+*.pfx
+*.log
+*.sql
+*.dump
+*.tar
+*.tar.gz
+__pycache__/

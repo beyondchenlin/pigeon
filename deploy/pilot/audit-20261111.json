@@ -1,0 +1,215 @@
+{
+  "checked_at_utc": "2026-11-10T16:25:39.687919+00:00",
+  "audited_source_commit": "6bbf0628a17ff8ae99b4c11fe8ffd2118f3f9d5f",
+  "branch": "dev",
+  "server_root": "/opt/phone-pilot-20261108/pigeon",
+  "image": {
+    "tag": "firerpa/pigeon:1.0",
+    "image_id": "sha256:2cf585fcc628a5d1b1212a1cc4bc62fcfbe81002a542c6ba31e1860ad4d2b36f",
+    "repo_digests": []
+  },
+  "frontend": {
+    "release": {
+      "revision": "4bcd6b30839c98735ce350dd4ad68d2eb10dbb41",
+      "branch": "dev",
+      "archive_sha256": "599ab8542134f8011ea9f530935fbb681425ee19801a07c59d2087f81168aad3"
+    },
+    "comparison": {
+      "local_count": 102,
+      "remote_count": 103,
+      "differences": [],
+      "missing": [],
+      "extra": [
+        "release.json"
+      ]
+    }
+  },
+  "custom_code": [
+    {
+      "name": "server/bk_metrics.py",
+      "remote": "5b622e2ada302aba4024a86ebb8554d7d4a85d3c6d4c75da40ea6c003bf9e7b5",
+      "local": "5b622e2ada302aba4024a86ebb8554d7d4a85d3c6d4c75da40ea6c003bf9e7b5",
+      "git": "5b622e2ada302aba4024a86ebb8554d7d4a85d3c6d4c75da40ea6c003bf9e7b5",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "server/bk_telemetry.py",
+      "remote": "ef5b333b289aa62111e427163b71f15592c29e62691cdd185d9298262dca390f",
+      "local": "ef5b333b289aa62111e427163b71f15592c29e62691cdd185d9298262dca390f",
+      "git": "ef5b333b289aa62111e427163b71f15592c29e62691cdd185d9298262dca390f",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "server/bk_ice.py",
+      "remote": "ee86922919a83656d0acfffd8d46c679e859d16ff309d17a3f717fe56d191f0b",
+      "local": "ee86922919a83656d0acfffd8d46c679e859d16ff309d17a3f717fe56d191f0b",
+      "git": "ee86922919a83656d0acfffd8d46c679e859d16ff309d17a3f717fe56d191f0b",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "server/bk_frame.py",
+      "remote": "9417a6f7aa4965ee6a0e4bbee5842f814e2a5da8aa393aee59050dd96d3630c5",
+      "local": "9417a6f7aa4965ee6a0e4bbee5842f814e2a5da8aa393aee59050dd96d3630c5",
+      "git": "9417a6f7aa4965ee6a0e4bbee5842f814e2a5da8aa393aee59050dd96d3630c5",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "ops/run_bk_server.py",
+      "remote": "ce8fdfe145cbe7703078e68bef7ac26e3170489818e9f0220e3989006f305802",
+      "local": "ce8fdfe145cbe7703078e68bef7ac26e3170489818e9f0220e3989006f305802",
+      "git": "ce8fdfe145cbe7703078e68bef7ac26e3170489818e9f0220e3989006f305802",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "ops/check_bk_telemetry.py",
+      "remote": "6d5e5e2bb1e1f0fcfa99a991e602029128467b2e3d2dc18c8a4050d02c47dfe7",
+      "local": "6d5e5e2bb1e1f0fcfa99a991e602029128467b2e3d2dc18c8a4050d02c47dfe7",
+      "git": "6d5e5e2bb1e1f0fcfa99a991e602029128467b2e3d2dc18c8a4050d02c47dfe7",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "ops/check_bk_ice.py",
+      "remote": "de237c0708f3ec75b228b6ad8c8500d77a4f62ab23b0e5aa2e74b2758dcba0e7",
+      "local": "de237c0708f3ec75b228b6ad8c8500d77a4f62ab23b0e5aa2e74b2758dcba0e7",
+      "git": "de237c0708f3ec75b228b6ad8c8500d77a4f62ab23b0e5aa2e74b2758dcba0e7",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "ops/check_bk_forwarding.py",
+      "remote": "ec4d62dc326e5df3b5856d6f9097f124fd5fa0e76ce47a5117f1138ce20c011c",
+      "local": "ec4d62dc326e5df3b5856d6f9097f124fd5fa0e76ce47a5117f1138ce20c011c",
+      "git": "ec4d62dc326e5df3b5856d6f9097f124fd5fa0e76ce47a5117f1138ce20c011c",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "ops/install_bk_telemetry.py",
+      "remote": "c46d5ded69c995d9899fcf72b95190dca366784be993fd762f93360e359702e0",
+      "local": "c46d5ded69c995d9899fcf72b95190dca366784be993fd762f93360e359702e0",
+      "git": "c46d5ded69c995d9899fcf72b95190dca366784be993fd762f93360e359702e0",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "ops/install_bk_console.py",
+      "remote": "e5e5b60c79fb551b11d6ec7a3c035ef1c7297190b3c10025f96cb5505992e0d0",
+      "local": "e5e5b60c79fb551b11d6ec7a3c035ef1c7297190b3c10025f96cb5505992e0d0",
+      "git": "e5e5b60c79fb551b11d6ec7a3c035ef1c7297190b3c10025f96cb5505992e0d0",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "lua/bk_device_console.lua",
+      "remote": "f2d5b39b82248cc88f7ce5d0408ed373d97ca9a8cad4959cf7b70dbf0f0a1862",
+      "local": "f2d5b39b82248cc88f7ce5d0408ed373d97ca9a8cad4959cf7b70dbf0f0a1862",
+      "git": "f2d5b39b82248cc88f7ce5d0408ed373d97ca9a8cad4959cf7b70dbf0f0a1862",
+      "exact": true,
+      "normalized": true
+    },
+    {
+      "name": "server/__main__.py",
+      "remote": "c494a1954743d63b5aebd4821621c2f485ea9377de42496ba0af65a725d93f85",
+      "local": "0d08e9e01314998c2f64af276f7b137b13edf8356df3113f57c72fbdcf43a451",
+      "git": "654c0a7a07dc42c0cac7b4f508ece8a21f1627c4959a6958f3fdb05ce2dce83f",
+      "exact": false,
+      "normalized": false
+    },
+    {
+      "name": "server/__init__.py",
+      "remote": "f973ea1601ef0e21ad00994dc8e3f36485cc52bb37bc93ccb6fe3b241a4b7919",
+      "local": "935384df8ce4f03b981f47a5199c8c1c064df753ff1c523145bec17cc08e53bd",
+      "git": "f973ea1601ef0e21ad00994dc8e3f36485cc52bb37bc93ccb6fe3b241a4b7919",
+      "exact": false,
+      "normalized": true
+    }
+  ],
+  "archived_deployment_files": [
+    {
+      "repository_path": "deploy/pilot/heartbeat_compat.py",
+      "server_relative_path": "data/user/phone-pilot/heartbeat_compat.py",
+      "sha256": "27b3a6fc18ec23a7b66802395c0b20562dbe992a4d2d2eacd1c6c7f77f4c8d1c"
+    },
+    {
+      "repository_path": "deploy/pilot/wait_auth_then_frps.py",
+      "server_relative_path": "data/user/phone-pilot/wait_auth_then_frps.py",
+      "sha256": "f92dbc6d3220fe385ce93998c355073398bb84fd074db5fbb873f855cb457213"
+    },
+    {
+      "repository_path": "deploy/pilot/single-phone-nginx.conf",
+      "server_relative_path": "single-phone-nginx.conf",
+      "sha256": "e4af4ef1d84b4c1e7c858df252de3c36c45c233289e49df4e0fbf185ceaed410"
+    },
+    {
+      "repository_path": "deploy/pilot/single-phone-supervisord.conf",
+      "server_relative_path": "single-phone-supervisord.conf",
+      "sha256": "fc883dcf0a4846f9d1b4228256e540804de2a0c825a2cfdebe5e0a35b5b168ce"
+    },
+    {
+      "repository_path": "deploy/pilot/compose.json",
+      "server_relative_path": "compose.json",
+      "sha256": "2f6b5e9f5642bc91a40ec133714b93905922e63c0b70b4c9f8fb3fd1efdfe756"
+    },
+    {
+      "repository_path": "deploy/pilot/auth.single-phone.py",
+      "server_relative_path": "auth.single-phone.py",
+      "sha256": "b0aee08049329c2643162ea386da2cfa342646c01b0558fffe21678fdd467fa4"
+    },
+    {
+      "repository_path": "deploy/pilot/postgres.conf",
+      "server_relative_path": "postgres.conf",
+      "sha256": "ee68337fa3f893e8fd3a288ed09edf9c17d8d8d55a75d263d8aba894161188c3"
+    },
+    {
+      "repository_path": "deploy/pilot/rabbitmq.conf",
+      "server_relative_path": "rabbitmq.conf",
+      "sha256": "baaa6d0d0b568a17c2813c8d3a0e51b03477d758fd931712301ff3d8f6b9a30e"
+    },
+    {
+      "repository_path": "deploy/pilot/redis/server-master.sh",
+      "server_relative_path": "redis/server-master.sh",
+      "sha256": "dbf7c416497d6907a6049009d405096ca674715b11d84db7b64ef6ccf1da8e3f"
+    },
+    {
+      "repository_path": "deploy/pilot/redis/server-slave.sh",
+      "server_relative_path": "redis/server-slave.sh",
+      "sha256": "e884de968b9fa765328d4083f975d85da32dffbd79477421e7042fc6476b8ae7"
+    },
+    {
+      "repository_path": "deploy/pilot/redis/server-lock.sh",
+      "server_relative_path": "redis/server-lock.sh",
+      "sha256": "ccdd92593412eb9a144a5351b9e62d8da17bcdce0d9875c9c68bbc15b93b85ac"
+    }
+  ],
+  "compiled_module_sha256": {
+    "/usr/lib/python3/dist-packages/server/service.cpython-311-x86_64-linux-gnu.so": "f64a9af7485a8d0e0ebde11a8db9036cce6bb208f3f0cf1e39416f5ba0cb314d",
+    "/usr/lib/python3/dist-packages/executor/utils.cpython-311-x86_64-linux-gnu.so": "1f952946e02e6eae867991c43f3bdc6d7da97e0ab0032f3ae23c9cf1fd3bb299",
+    "/usr/lib/python3/dist-packages/executor/config.cpython-311-x86_64-linux-gnu.so": "774e2b75bab443f401819e18bc7bb7cf96c19122ad04a47d3f84ae716d0db0a5",
+    "/usr/lib/python3/dist-packages/executor/queue.cpython-311-x86_64-linux-gnu.so": "679ffe9a8daea4e3139f23b32150c42267022d05a1eb0d74b4c7a74f877dc229",
+    "/usr/lib/python3/dist-packages/executor/event.cpython-311-x86_64-linux-gnu.so": "f52862db5772965bc88814b04f5a9d87ecdcbc3e76720750cb1ccc4a577cdd20",
+    "/usr/lib/python3/dist-packages/executor/handlers/event.cpython-311-x86_64-linux-gnu.so": "04e28b294d4b4aef6e8482d3da518ac2f24bbf1569e31e236b88097ee64a843a"
+  },
+  "observed_python_packages": {
+    "Pillow": "13.0.0",
+    "tornado": "6.4",
+    "SQLAlchemy": "2.0.49",
+    "lamda": "10.6",
+    "uvloop": "0.19.0"
+  },
+  "validation": {
+    "compose_syntax": true,
+    "redis_shell_syntax": true,
+    "archived_python_syntax": true
+  },
+  "limits": [
+    "Compiled modules are identified by image and hash, not verified by reproducible source builds.",
+    "Private environment, certificates, databases, user data and host TLS proxy are excluded.",
+    "Pilot compatibility module is scoped to the enrolled device domain."
+  ]
+}
