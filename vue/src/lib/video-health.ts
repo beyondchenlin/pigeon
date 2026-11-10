@@ -19,7 +19,9 @@ export class VideoHealth {
     this.decoded = decoded; this.packets = packets;
     // A static screen may legitimately send no frames. Probe once after input,
     // or when RTP keeps arriving but decoding has stopped; never on idle alone.
-    if (interaction > this.checkedInteraction && interaction > this.lastFrameAt && now - interaction >= 1500) {
+    // A pre-input frame can arrive late. Its arrival alone must not satisfy
+    // the interaction; the caller clears the expectation on visible change.
+    if (interaction > this.checkedInteraction && now - Math.max(interaction, this.lastFrameAt) >= 1500) {
       this.checkedInteraction = interaction;
       return '操作后视频未更新';
     }

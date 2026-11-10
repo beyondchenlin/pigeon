@@ -269,7 +269,7 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
     activeProfile=profile;
     o.profile?.(profile);
     rtc = startRtcVideo({ url: o.url, iceServers, video: o.video, stats: o.stats, inputChannel: o.inputChannel, profile,displaySize:o.displaySize,
-      interaction:()=>lastInput,
+      interaction:()=>lastInput>lastMotion?lastInput:-Infinity,
       stalled:reason=>{
         if(disposed||rescuing)return;
         rescuing=true;clearDetail();o.log(`WebRTC：${reason}，临时使用新截图，保留点对点控制`);fallback();

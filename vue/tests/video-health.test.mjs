@@ -23,3 +23,11 @@ test('RTP without decoded progress is stalled; new decoded progress and sparse i
  assert.equal(h.sample(5000,2,40,-Infinity),null);
  assert.equal(h.sample(10000,2,40,-Infinity),null);
 });
+
+test('a late unchanged pre-input frame does not suppress an outstanding interaction probe',()=>{
+ const h=new VideoHealth();h.frame(100);h.sample(1000,1,10,-Infinity);
+ h.frame(1700);h.sample(2000,2,20,1500);
+ assert.equal(h.sample(3000,2,20,1500),null);
+ assert.equal(h.sample(4000,2,20,1500),'操作后视频未更新');
+ assert.equal(h.sample(5000,2,20,-Infinity),null);
+});
