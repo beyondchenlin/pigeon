@@ -52,6 +52,7 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   let previousStats: any;
   const health = new VideoHealth();
   let stalledAt: number | undefined, lastNetworkSample = -Infinity;
+  let recoveryKeyframes: number | null | undefined;
   const remoteCandidates: (RTCIceCandidateInit | null)[] = [];
   const localCandidates: (RTCIceCandidateInit | null)[] = [];
   const close = () => {
@@ -74,7 +75,11 @@ export function startRtcVideo(o: RtcOptions): Cancel {
     const changed = decoded === undefined ? video.currentTime !== previousTime : decoded !== previousDecoded;
     if (video.readyState >= 2 && video.videoWidth && video.videoHeight && changed) {
       previousTime = video.currentTime; previousDecoded = decoded ?? -1;
-      health.frame(performance.now()); stalledAt = undefined;
+      health.frame(performance.now());
+      // After an interrupted H.264 chain, received P frames can still show old
+      // content. Keep the fresh screenshot until a new keyframe is decoded.
+      if(stalledAt !== undefined && recoveryKeyframes !== undefined)return;
+      stalledAt = undefined;
       if (!ready) { ready = true; clearTimeout(first); o.ready(); }
       if (closed) return;
       try { o.frame(video); } catch { fail('视频绘制失败'); return; }
@@ -160,8 +165,19 @@ export function startRtcVideo(o: RtcOptions): Cancel {
         const receiver = all.find(s => s.type === 'inbound-rtp' && s.kind === 'video');
         const now = performance.now();
         if (receiver) {
+          if(stalledAt !== undefined && recoveryKeyframes != null && receiver.keyFramesDecoded > recoveryKeyframes) {
+            // Stats can lead the compositor. Wait for the next drawable frame
+            // rather than displaying the old video surface immediately.
+            recoveryKeyframes=undefined;
+          }
           const reason = health.sample(now, receiver.framesDecoded ?? 0, receiver.packetsReceived ?? 0, o.interaction?.() ?? -Infinity);
-          if (reason && stalledAt === undefined) { stalledAt = now; o.stalled?.(reason); }
+          if (reason && stalledAt === undefined) {
+            stalledAt = now;
+            // Browsers without this optional stat use the bounded media-session
+            // replacement below rather than guessing that a P frame is fresh.
+            recoveryKeyframes=Number.isFinite(receiver.keyFramesDecoded)?receiver.keyFramesDecoded:null;
+            o.stalled?.(reason);
+          }
           // Keep the peer and P2P input during the first rescue. Only replace
           // this media session if real decoded frames still fail to return.
           if (stalledAt !== undefined && now - stalledAt >= 8000) { fail('媒体持续无新帧'); return; }

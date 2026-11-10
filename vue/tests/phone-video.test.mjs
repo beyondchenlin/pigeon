@@ -177,13 +177,16 @@ test('confirmed command recovery bypasses video backoff without duplicate attemp
 
 test('stalled input response opens fresh screenshots without closing P2P, then returns on new video',async t=>{
  const s=setup(t,true,{mounted:true}),v=s.videos[0],pc=s.peers[0];
- let decoded=1;
- pc.getStats=async()=>new Map([['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:decoded,packetsReceived:10}]]);
+ let decoded=1,keys=1;
+ pc.getStats=async()=>new Map([['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:decoded,keyFramesDecoded:keys,packetsReceived:10}]]);
  pc.ontrack({track:{kind:'video'},streams:[{}],receiver:{}});v.emit();
  t.mock.timers.tick(1000);await flush();
  s.stop.interact();t.mock.timers.tick(2000);await flush();
  assert.equal(s.modes.at(-1),'mjpeg');assert.equal(s.snapshots[0].short,360);
  assert.equal(pc.closed,undefined);assert.equal(s.peers.length,1);
+ decoded++;v.emit();assert.equal(s.modes.at(-1),'mjpeg'); // A P frame is insufficient.
+ keys++;t.mock.timers.tick(1000);await flush();
+ assert.equal(s.modes.at(-1),'mjpeg'); // Stats alone must not reveal a stale surface.
  decoded++;v.emit();
  assert.equal(s.modes.at(-1),'webrtc');assert.equal(s.snapshots[0].signal.aborted,true);
  assert.equal(s.peers.length,1);
@@ -197,6 +200,16 @@ test('a persistent media stall replaces only its peer after the bounded screensh
  t.mock.timers.tick(7000);await flush();assert.equal(pc.closed,undefined);
  t.mock.timers.tick(1000);await flush();assert.equal(pc.closed,true);
  t.mock.timers.tick(1000);await flush();assert.equal(s.peers.length,2);
+});
+
+test('decoded delta frames cannot indefinitely delay keyframe recovery',async t=>{
+ const s=setup(t,true),v=s.videos[0],pc=s.peers[0];let decoded=1;
+ pc.getStats=async()=>new Map([['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:decoded,keyFramesDecoded:1,packetsReceived:decoded*10}]]);
+ v.emit();t.mock.timers.tick(1000);await flush();s.stop.interact();
+ t.mock.timers.tick(2000);await flush();assert.equal(s.modes.at(-1),'mjpeg');
+ for(let i=0;i<7;i++){decoded++;v.emit();t.mock.timers.tick(1000);await flush();}
+ assert.equal(pc.closed,undefined);assert.equal(s.modes.at(-1),'mjpeg');
+ decoded++;v.emit();t.mock.timers.tick(1000);await flush();assert.equal(pc.closed,true);
 });
 
 test('static idle video keeps its peer and does not start screenshot rescue',async t=>{
