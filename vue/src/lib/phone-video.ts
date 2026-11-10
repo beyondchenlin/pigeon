@@ -26,7 +26,8 @@ type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers'> & {
 export function startRtcVideo(o: RtcOptions): Cancel {
   let closed = false, ready = false, remoteReady = false, offered = false;
   let pc: RTCPeerConnection | undefined, ws: WebSocket | undefined;
-  let video: HTMLVideoElement | undefined, frameId = 0, raf = 0, previousTime = -1;
+  let video: HTMLVideoElement | undefined, frameId = 0, raf = 0, previousTime = -1, previousDecoded = -1;
+  let lastCallback = 0, paintWatchdog: ReturnType<typeof setInterval> | undefined;
   let first: ReturnType<typeof setTimeout> | undefined, disconnected: ReturnType<typeof setTimeout> | undefined;
   let ping: ReturnType<typeof setInterval> | undefined, statsTimer: ReturnType<typeof setInterval> | undefined;
   let statsBusy = false, incoming = Promise.resolve();
@@ -34,7 +35,7 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   const localCandidates: (RTCIceCandidateInit | null)[] = [];
   const close = () => {
     if (closed) return; closed = true;
-    clearTimeout(first); clearTimeout(disconnected); clearInterval(ping); clearInterval(statsTimer);
+    clearTimeout(first); clearTimeout(disconnected); clearInterval(ping); clearInterval(statsTimer); clearInterval(paintWatchdog);
     if (video) { if (frameId) video.cancelVideoFrameCallback?.(frameId); cancelAnimationFrame(raf); video.pause(); video.srcObject = null; }
     if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); }
     if (pc) {
@@ -46,14 +47,21 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   const fail = (reason: string) => { if (closed) return; close(); o.failed(reason); };
   const send = (type: string, data?: unknown) => { if (!closed && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, data })); };
   const local = (candidate: RTCIceCandidateInit | null) => candidate ? send('candidate', candidate) : send('ice-candidates-complete');
-  function render() {
+  function drawLatest() {
     if (closed || !video) return;
-    if (video.readyState >= 2 && video.videoWidth && video.videoHeight && video.currentTime !== previousTime) {
-      previousTime = video.currentTime;
+    const decoded = video.getVideoPlaybackQuality?.().totalVideoFrames;
+    const changed = decoded === undefined ? video.currentTime !== previousTime : decoded !== previousDecoded;
+    if (video.readyState >= 2 && video.videoWidth && video.videoHeight && changed) {
+      previousTime = video.currentTime; previousDecoded = decoded ?? -1;
       if (!ready) { ready = true; clearTimeout(first); o.ready(); }
       if (closed) return;
       try { o.frame(video); } catch { fail('视频绘制失败'); return; }
     }
+  }
+  function render() {
+    if (closed || !video) return;
+    lastCallback = performance.now(); drawLatest();
+    if (closed) return;
     if (video.requestVideoFrameCallback) frameId = video.requestVideoFrameCallback(render);
     else raf = requestAnimationFrame(render);
   }
@@ -123,27 +131,35 @@ export function startRtcVideo(o: RtcOptions): Cancel {
       }).catch(() => {}).finally(() => { statsBusy = false; });
     }, 2000);
     render();
+    // This detached video is decoded into the visible canvas. Chromium may
+    // throttle its compositor callback even while new frames are decoded.
+    // Draw only the latest decoded frame; never replay a queue of old pictures.
+    paintWatchdog = setInterval(() => {
+      if (performance.now() - lastCallback >= 150) drawLatest();
+    }, 100);
   } catch { fail('浏览器无法建立 WebRTC'); }
   return close;
 }
 
-/** Bounded fallback decoder. A video restart never restarts the touch channel. */
+/** Low-rate JPEG fallback. Independent frames cannot build a dependent GOP queue.
+ * Avoid the native H.264 fallback worker, which has hung during reconnect on the
+ * pilot phone. WebRTC remains the primary H.264 media path.
+ */
 function startSocketVideo(o: VideoOptions): Cancel {
   let disposed = false, cancel: Cancel = () => {}, retry: ReturnType<typeof setTimeout> | undefined;
-  let codecFailures = 0, networkFailures = 0;
+  let networkFailures = 0;
   function connect() {
     if (disposed) return; cancel();
-    let closed = false, ws: WebSocket | undefined, worker: Worker | undefined, workerUrl: string | undefined;
-    let check: ReturnType<typeof setInterval> | undefined, pending = 0, oldest = 0, frames = 0;
+    let closed = false, ws: WebSocket | undefined;
+    let check: ReturnType<typeof setInterval> | undefined, frames = 0;
     let decoding = false, latest: Blob | null = null, lastProgress = Date.now();
-    const mode = codecFailures >= 2 ? 'mjpeg' : 'h264';
-    o.mode(mode); o.state('connecting');
+    o.mode('mjpeg'); o.state('connecting');
     cancel = () => {
-      if (closed) return; closed = true; latest = null; clearInterval(check); worker?.terminate(); if (workerUrl) URL.revokeObjectURL(workerUrl);
+      if (closed) return; closed = true; latest = null; clearInterval(check);
       if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); }
     };
-    const recover = (reason: string, codec = false) => {
-      if (closed || disposed) return; cancel(); if (codec) codecFailures++;
+    const recover = (reason: string) => {
+      if (closed || disposed) return; cancel();
       const wait = Math.min(8000, 300 * 2 ** Math.min(networkFailures++, 5));
       o.state('reconnecting'); o.log(`${reason}，正在恢复画面`); retry = setTimeout(connect, wait);
     };
@@ -152,27 +168,10 @@ function startSocketVideo(o: VideoOptions): Cancel {
     if (!context) { o.log('浏览器无法绘制画面'); return; }
     const size = (w: number, h: number) => { if (o.canvas.width !== w || o.canvas.height !== h) { o.canvas.width = w; o.canvas.height = h; } };
     try {
-      if (mode === 'h264') {
-        const source = `var window=self;self.window=self;var document=undefined;importScripts(${JSON.stringify(o.decoderUrl)});var decoder=new H264Decoder();onmessage=function(e){try{if(decoder.decode(new Uint8Array(e.data))===H264Decoder.PIC_RDY){var w=decoder.width,h=decoder.height,yuv=decoder.pic,out=new Uint8ClampedArray(w*h*4),uw=w>>1,uo=w*h,vo=uo+uw*(h>>1);for(var j=0,p=0;j<h;j++)for(var i=0;i<w;i++){var y=yuv[j*w+i],uv=(j>>1)*uw+(i>>1),u=yuv[uo+uv]-128,v=yuv[vo+uv]-128;out[p++]=y+1.402*v;out[p++]=y-.344136*u-.714136*v;out[p++]=y+1.772*u;out[p++]=255;}postMessage({w:w,h:h,rgba:out.buffer},[out.buffer]);}postMessage({done:true});}catch(e){postMessage({error:true});}};`;
-        workerUrl = URL.createObjectURL(new Blob([source], { type: 'application/javascript' })); worker = new Worker(workerUrl);
-        worker.onerror = () => recover('H.264 解码器不可用', true);
-        worker.onmessage = e => {
-          if (closed) return; const d = e.data;
-          if (d.error) { recover('H.264 解码失败', true); return; }
-          if (d.done) { pending = Math.max(0, pending - 1); if (!pending) oldest = 0; return; }
-          size(d.w, d.h); context.putImageData(new ImageData(new Uint8ClampedArray(d.rgba), d.w, d.h), 0, 0); drawn(d.w, d.h);
-        };
-      }
-      ws = new WebSocket(o.url(`/ws/screen/25@${mode === 'h264' ? 15 : 8}/live?type=${mode}&backend=${mode === 'h264' ? 1 : 0}&scale=0.5&display=0`));
-      ws.binaryType = mode === 'h264' ? 'arraybuffer' : 'blob';
+      ws = new WebSocket(o.url('/ws/screen/25@5/live?type=mjpeg&backend=0&scale=0.5&display=0'));
+      ws.binaryType = 'blob';
       ws.onmessage = async e => {
         if (closed) return;
-        if (worker && e.data instanceof ArrayBuffer) {
-          if (!pending) oldest = Date.now();
-          // Bound both burst memory and queue age, without discarding dependent P frames.
-          if (++pending > 24 || Date.now() - oldest > 500) { recover('视频队列积压'); return; }
-          worker.postMessage(e.data, [e.data]); return;
-        }
         if (!(e.data instanceof Blob)) return; latest = e.data; if (decoding) return; decoding = true;
         try {
           while (latest && !closed) {
@@ -184,10 +183,9 @@ function startSocketVideo(o: VideoOptions): Cancel {
       ws.onclose = ws.onerror = () => recover('视频连接中断');
       check = setInterval(() => {
         if (!frames && Date.now() - lastProgress > 12000) recover('视频首帧等待超时');
-        else if (pending && Date.now() - oldest > 1000) recover('解码队列超时');
         // A connected, unchanged screen is not a broken video stream.
       }, 1000);
-    } catch { recover('视频初始化失败', true); }
+    } catch { recover('视频初始化失败'); }
   }
   connect();
   return () => { disposed = true; clearTimeout(retry); cancel(); };
@@ -222,6 +220,9 @@ export function startPhoneVideo(o: VideoOptions): Cancel {
       }
     });
   };
-  fallback(); upgrade();
+  // Negotiate RTC first, rather than starting two encoders on every reconnect.
+  // JPEG only starts after RTC fails (or when RTC is explicitly unavailable).
+  if (o.webrtc === false || typeof RTCPeerConnection === 'undefined') fallback();
+  else { o.mode('webrtc'); o.state('connecting'); upgrade(); }
   return () => { disposed = true; clearTimeout(retry); rtc?.(); socket?.(); };
 }

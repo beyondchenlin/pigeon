@@ -4,7 +4,7 @@ import { startRtcVideo, startPhoneVideo } from '../src/lib/phone-video.ts';
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function setup(t, combined = false, extra = {}) {
-  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
   const sockets = [], peers = [], videos = [], failures = [], frames = [], modes = [];
   let ready = 0;
   class Socket {
@@ -26,13 +26,14 @@ function setup(t, combined = false, extra = {}) {
     async getStats() { return new Map(); }
   }
   const doc = { createElement() {
-    const video = { readyState: 0, currentTime: 0, videoWidth: 0, videoHeight: 0, async play() {}, pause() {},
+    const video = { readyState: 0, currentTime: 0, decoded: 0, videoWidth: 0, videoHeight: 0, async play() {}, pause() {},
+      getVideoPlaybackQuality() { return { totalVideoFrames: this.decoded }; },
       requestVideoFrameCallback(cb) { this.callback = cb; return 1; }, cancelVideoFrameCallback() { this.callback = null; },
-      emit() { this.readyState = 4; this.currentTime++; this.videoWidth = 540; this.videoHeight = 1194; this.callback?.(); }
+      emit() { this.readyState = 4; this.currentTime++; this.decoded++; this.videoWidth = 540; this.videoHeight = 1194; this.callback?.(); }
     }; videos.push(video); return video;
   }};
   const restores = [];
-  for (const [name, value] of Object.entries({ WebSocket: Socket, RTCPeerConnection: Peer, document: doc, cancelAnimationFrame() {}, Worker: class { terminate() {} } })) {
+  for (const [name, value] of Object.entries({ WebSocket: Socket, RTCPeerConnection: Peer, document: doc, performance: { now: () => Date.now() }, cancelAnimationFrame() {}, async createImageBitmap() {} })) {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
     restores.push(() => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]);
@@ -91,19 +92,25 @@ test('transient disconnect recovers before the grace deadline', t => {
   t.mock.timers.tick(3000); assert.equal(s.failures.length, 1);
 });
 
-test('RTC first frame retires fallback, failed media opens a fresh fallback', t => {
-  const s = setup(t, true), fallback = s.sockets.find(x => x.url.includes('/live'));
-  assert.equal(fallback.closed, 0); assert.deepEqual(s.modes, ['h264']);
-  s.videos[0].emit(); assert.equal(fallback.closed, 1); assert.equal(s.modes.at(-1), 'webrtc');
+test('RTC starts alone, failed media opens a JPEG fallback, recovery closes it', t => {
+  const s = setup(t, true);
+  assert.equal(s.sockets.length, 1); assert.deepEqual(s.modes, ['webrtc']);
+  s.videos[0].emit(); assert.equal(s.modes.at(-1), 'webrtc');
   s.peers[0].connectionState = 'failed'; s.peers[0].onconnectionstatechange();
-  assert.equal(s.modes.at(-1), 'h264'); assert.equal(s.sockets.filter(x => x.url.includes('/live')).length, 2);
+  const fallback = s.sockets.find(x => x.url.includes('/live'));
+  assert.match(fallback.url, /25@5\/live\?type=mjpeg&backend=0/);
+  assert.equal(s.modes.at(-1), 'mjpeg'); assert.equal(fallback.closed, 0);
+  t.mock.timers.tick(2000); s.videos[1].emit();
+  assert.equal(fallback.closed, 1); assert.equal(s.modes.at(-1), 'webrtc');
   const count = s.sockets.length; s.stop(); t.mock.timers.tick(60000);
   assert.equal(s.sockets.length, count); assert.ok(s.sockets.every(x => x.closed === 1));
 });
 
 test('failed RTC negotiation leaves the existing fallback socket alive', t => {
-  const s = setup(t, true), fallback = s.sockets.find(x => x.url.includes('/live'));
+  const s = setup(t, true);
   s.sockets.find(x => x.url.includes('/signaling')).onerror();
+  const fallback = s.sockets.find(x => x.url.includes('/live'));
+  t.mock.timers.tick(2000); s.sockets.at(-1).onerror();
   assert.equal(fallback.closed, 0); assert.equal(s.sockets.filter(x => x.url.includes('/live')).length, 1);
   s.stop(); assert.equal(fallback.closed, 1);
 });
@@ -111,13 +118,42 @@ test('failed RTC negotiation leaves the existing fallback socket alive', t => {
 test('late ICE credentials cannot create a peer after the page stops', async t => {
   let resolve;
   const s = setup(t, true, { loadIceServers: () => new Promise(r => resolve = r) });
-  assert.equal(s.peers.length, 0); assert.equal(s.sockets.length, 1);
+  assert.equal(s.peers.length, 0); assert.equal(s.sockets.length, 0);
   s.stop(); resolve([]); await flush();
-  assert.equal(s.peers.length, 0); assert.equal(s.sockets[0].closed, 1);
+  assert.equal(s.peers.length, 0); assert.equal(s.sockets.length, 0);
 });
 
-test('credential endpoint failure retains fallback and attempts direct RTC', async t => {
+test('credential endpoint failure attempts direct RTC before opening fallback', async t => {
   const s = setup(t, true, { loadIceServers: async () => { throw new Error('timeout'); } });
   await flush(); assert.equal(s.peers.length, 1);
-  assert.equal(s.sockets.find(x => x.url.includes('/live')).closed, 0);
+  assert.equal(s.sockets.filter(x => x.url.includes('/live')).length, 0);
+});
+
+test('latest decoded frame is painted when compositor callbacks stall, without duplicate painting', t => {
+  const s = setup(t), v = s.videos[0];
+  v.emit(); assert.equal(s.frames.length, 1);
+  v.currentTime += 1; v.decoded += 3; // Frames decoded, but no video callback.
+  t.mock.timers.tick(200); assert.equal(s.frames.length, 2);
+  t.mock.timers.tick(1000); assert.equal(s.frames.length, 2);
+  v.callback(); assert.equal(s.frames.length, 2);
+  s.stop(); v.decoded++; t.mock.timers.tick(1000); assert.equal(s.frames.length, 2);
+});
+
+test('explicit compatibility mode starts JPEG without a peer', t => {
+  const s = setup(t, true, { webrtc: false });
+  assert.equal(s.peers.length, 0); assert.equal(s.sockets.length, 1);
+  assert.match(s.sockets[0].url, /type=mjpeg/);
+});
+
+test('JPEG decode drops intermediate frames and closes an in-flight bitmap after disposal', async t => {
+  const s = setup(t, true, { webrtc: false }), pending = [];
+  t.mock.method(globalThis, 'createImageBitmap', blob => new Promise(resolve => pending.push({ blob, resolve }))) ;
+  const ws = s.sockets[0], first = new Blob(['first']), middle = new Blob(['middle']), latest = new Blob(['latest']);
+  ws.onmessage({ data: first }); ws.onmessage({ data: middle }); ws.onmessage({ data: latest });
+  assert.equal(pending.length, 1);
+  let closed = 0;
+  pending[0].resolve({ width: 540, height: 1194, close() { closed++; } }); await flush();
+  assert.equal(pending.length, 2); assert.equal(pending[1].blob, latest);
+  s.stop(); pending[1].resolve({ width: 540, height: 1194, close() { closed++; } }); await flush();
+  assert.equal(closed, 2); assert.equal(s.frames.length, 1);
 });
