@@ -32,4 +32,4 @@ path = "/frp/port"
 ops = ["NewProxy"]
 EOL
 
-exec /usr/sbin/frps $@
+exec "${BK_FRPS_BIN:-/usr/sbin/frps}" "$@"

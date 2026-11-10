@@ -1,0 +1,63 @@
+"""Forwarding adapter contract and safe replacement regression checks."""
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+from ops.bk_frpc_adapter import official_args, main
+from ops.install_bk_frpc import atomic, sha
+from ops.install_bk_frps import linux_shell
+
+
+class ForwardingAdapterTests(unittest.TestCase):
+    def test_windows_checkout_shell_is_executable_on_linux(self):
+        self.assertEqual(linux_shell(b'#!/bin/sh\r\nexec "$@"\r\n'), b'#!/bin/sh\nexec "$@"\n')
+        with self.assertRaises(ValueError):linux_shell(b'not a shell script')
+
+    def test_native_cli_preserves_config_path(self):
+        config = '/data/local/tmp/one phone/.local/run/fwd.toml'
+        self.assertEqual(official_args(['-f', '-c', config, '-s']), ['-c', config])
+
+    def test_versions_and_help_do_not_start_a_second_daemon(self):
+        self.assertEqual(official_args(['-v']), ['--version'])
+        self.assertEqual(official_args(['-h']), ['--help'])
+
+    def test_missing_and_unknown_args_fail_closed_without_leaking_values(self):
+        for args in ([], ['-c'], ['--token', 'sensitive-value'], ['-c', 'a', 'extra']):
+            with self.subTest(args=args), self.assertRaises(ValueError) as error:
+                official_args(args)
+            self.assertNotIn('sensitive-value', str(error.exception))
+
+    def test_exec_replaces_supervised_child_and_preserves_native_config(self):
+        with patch.dict(os.environ, {'USRDIR':'/data/local/tmp/usr'}), \
+                patch('sys.argv', ['xfrpc', '-f', '-c', '/device-specific.toml']), \
+                patch('os.execv') as execute:
+            main()
+        binary=str(Path('/data/local/tmp/usr')/'phone-pilot/frpc-0.72.0-android-arm64')
+        execute.assert_called_once_with(binary, [binary, '-c', '/device-specific.toml'])
+
+    def test_atomic_replacement_and_recovery_content(self):
+        with tempfile.TemporaryDirectory(prefix='bk-frpc-unit-') as directory:
+            entry=Path(directory)/'xfrpc'
+            entry.write_bytes(b'original')
+            original=entry.read_bytes()
+            atomic(entry,b'adapter')
+            self.assertEqual(entry.read_bytes(),b'adapter')
+            atomic(entry,original)
+            self.assertEqual(entry.read_bytes(),b'original')
+            self.assertEqual(len(sha(entry)),64)
+            self.assertFalse(entry.with_name('xfrpc.bk-install').exists())
+
+    def test_unexpected_staging_file_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory(prefix='bk-frpc-unit-') as directory:
+            entry=Path(directory)/'xfrpc'
+            entry.write_bytes(b'original')
+            pending=entry.with_name('xfrpc.bk-install')
+            pending.write_bytes(b'another operation')
+            with self.assertRaises(FileExistsError):atomic(entry,b'adapter')
+            self.assertEqual(entry.read_bytes(),b'original')
+            self.assertEqual(pending.read_bytes(),b'another operation')
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -84,7 +84,7 @@ popd
 
 # frps
 pushd $(pwd)
-FRP_VERSION="0.71.0"
+FRP_VERSION="0.72.0"
 UNAME=$(uname -m)
 case "$UNAME" in
 x86_64)    ARCH="amd64" ;;
