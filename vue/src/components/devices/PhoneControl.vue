@@ -14,13 +14,16 @@ const panel = ref<HTMLDivElement>();
 const viewport = ref<HTMLDivElement>();
 const keyboard = ref<HTMLTextAreaElement>();
 const composing = ref(false);
-const input = createPhoneInput((cmd, data) => props.requestCommand(cmd, data), () => emit('log', '文字输入未完成，请确认手机输入框和连接后重试'));
+const input = createPhoneInput((cmd, data) => props.requestCommand(cmd, data), () => emit('log', '键盘操作未完成，请确认输入框、连接及浏览器剪贴板权限后重试'), text => navigator.clipboard.writeText(text));
 function inputText() {
   if (composing.value || !keyboard.value) return;
   if (props.commandReady) input.insert(keyboard.value.value);
   keyboard.value.value = '';
 }
 function keyboardDown(e: KeyboardEvent) {
+  if (!e.isComposing && e.keyCode !== 229 && (e.ctrlKey || e.metaKey) && !e.altKey && ['c', 'x'].includes(e.key.toLowerCase()) && props.commandReady) {
+    e.preventDefault(); input.copy(e.key.toLowerCase() === 'x'); return;
+  }
   const mapped = androidKey(e);
   if (mapped && props.commandReady) { e.preventDefault(); input.key(...mapped); }
 }

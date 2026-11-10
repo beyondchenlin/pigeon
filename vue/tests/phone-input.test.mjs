@@ -28,3 +28,13 @@ test('IME and paste shortcuts are not forwarded twice; editing keys are mapped',
  assert.deepEqual(androidKey({key:'Backspace'}),[67,0]);
  assert.deepEqual(androidKey({key:'a',ctrlKey:true}),[29,4096]);
 });
+test('copy reads selected phone text after Ctrl+C, then writes it to computer clipboard',async()=>{
+ const calls=[];const input=createPhoneInput(async(c,d)=>{calls.push([c,d]);return c==='clipboard/get'?'复制测试':true},()=>assert.fail(),async text=>calls.push(['computer',text]));
+ input.copy();await flush();
+ assert.deepEqual(calls,[['device/input/keycode',[0,31,4096]],['clipboard/get',[]],['computer','复制测试']]);
+});
+test('disconnect during clipboard fetch cannot overwrite the computer clipboard later',async()=>{
+ let ack;const writes=[];
+ const input=createPhoneInput(async c=>c==='clipboard/get'?new Promise(r=>ack=r):true,()=>{},async x=>writes.push(x));
+ input.copy();await flush();input.reset();ack('stale');await flush();assert.deepEqual(writes,[]);
+});

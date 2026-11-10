@@ -1,6 +1,6 @@
 /** Ordered Android input. Text uses the native Unicode clipboard + paste path. */
 export type PhoneRequest = (command: string, data: unknown) => Promise<any>;
-export function createPhoneInput(request: PhoneRequest, failed: () => void) {
+export function createPhoneInput(request: PhoneRequest, failed: () => void, copyToComputer?: (text: string) => Promise<void>) {
   let generation = 0, pending = 0, text = '', timer: ReturnType<typeof setTimeout> | undefined;
   let tail = Promise.resolve();
   function enqueue(action: (valid: () => boolean) => Promise<void>) {
@@ -28,8 +28,18 @@ export function createPhoneInput(request: PhoneRequest, failed: () => void) {
   function key(code: number, meta = 0) {
     flush(); enqueue(async () => { await request('device/input/keycode', [0, code, meta]); });
   }
+  function copy(cut = false) {
+    flush(); enqueue(async valid => {
+      await request('device/input/keycode', [0, cut ? 52 : 31, 0x1000]);
+      if (!valid()) return;
+      const value = await request('clipboard/get', []);
+      if (!valid()) return;
+      if (typeof value !== 'string' || !copyToComputer) throw new Error('Clipboard unavailable');
+      await copyToComputer(value);
+    });
+  }
   function reset() { generation++; pending = 0; text = ''; clearTimeout(timer); }
-  return { insert, key, reset, flush, get busy() { return pending > 0 || !!text; } };
+  return { insert, key, copy, reset, flush, get busy() { return pending > 0 || !!text; } };
 }
 
 /** Only active while the phone's invisible input has focus. */
