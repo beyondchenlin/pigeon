@@ -595,7 +595,7 @@ const pageNumbers = computed(() =>
 
       <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
       <!-- Global Stats -->
-      <div class="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div class="jobs-stat-grid grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <div
           v-for="stat in statChips"
           :key="stat.label"

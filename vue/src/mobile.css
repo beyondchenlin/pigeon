@@ -53,4 +53,5 @@
  .bk-batch-page main>div.flex{flex:1 0 350px;min-height:350px;overflow:hidden}
  .bk-batch-page main>div.flex>div:first-child{padding:12px}.bk-batch-page main>div.flex>div:last-child{padding:8px 12px;flex-wrap:wrap;gap:8px}
  .bk-batch-page main>div.flex>div:last-child>div{flex-wrap:wrap;gap:6px}
+ .jobs-stat-grid{grid-template-columns:repeat(5,minmax(0,1fr));gap:5px}.jobs-stat-grid>div{min-width:0;padding:8px 5px;gap:0}.jobs-stat-grid>div>div:first-of-type{display:none}.jobs-stat-grid .text-2xl{font-size:18px}.jobs-stat-grid .text-xs{font-size:10px}.jobs-stat-grid .mt-0\.5{display:none}
 }
