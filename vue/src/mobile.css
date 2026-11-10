@@ -1,0 +1,43 @@
+/* Shared mobile shell. Desktop layout remains owned by the original pages. */
+.bk-mobile-header,.bk-mobile-nav{display:none}
+.bk-page{min-width:0}
+@media(max-width:1023px){
+ .bk-page:not(.device-workbench){box-sizing:border-box;height:var(--bk-viewport-height,100dvh)!important;min-height:0!important;padding-top:50px;padding-bottom:calc(58px + env(safe-area-inset-bottom));overflow:hidden}
+ .bk-page:not(.device-workbench)>main,.bk-page:not(.device-workbench)>div.h-screen{height:100%!important;min-height:0;min-width:0;max-width:100%;margin-left:0}
+ .bk-mobile-header{display:flex;align-items:center;justify-content:space-between;position:fixed;inset:0 0 auto;z-index:35;height:50px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--background)}
+ .bk-mobile-header .brand-identity__logo{width:28px;height:28px;flex-basis:28px}
+ .bk-mobile-nav{display:grid;grid-template-columns:repeat(4,1fr);position:fixed;inset:auto 0 0;z-index:35;min-height:58px;padding:3px 6px calc(3px + env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--background)}
+ .bk-mobile-nav a,.bk-mobile-nav button{display:flex;min-height:48px;align-items:center;justify-content:center;gap:3px;flex-direction:column;border-radius:6px;font-size:10px}
+ .bk-mobile-nav .active{background:#fff0e6;color:#d25200}.dark .bk-mobile-nav .active{background:#3d271b;color:#ffac73}
+ .bk-mobile-nav svg{width:19px;height:19px}.bk-mobile-header button{min-width:40px;min-height:40px}
+ .bk-mobile-menu{display:grid;gap:7px}.bk-mobile-menu a,.bk-mobile-menu>button{display:flex;align-items:center;gap:12px;min-height:46px;border:1px solid var(--border);border-radius:6px;padding:10px 12px;text-align:left;font-size:14px}
+ .bk-mobile-menu svg{width:18px;height:18px}
+ [data-slot=dialog-content],[data-slot=alert-dialog-content]{max-width:calc(100vw - 24px)!important;max-height:calc(var(--bk-viewport-height,100dvh) - 32px);overflow:auto;overscroll-behavior:contain}
+ [data-slot=sheet-content]{max-width:100vw;max-height:var(--bk-viewport-height,100dvh);overflow:auto}
+ [data-slot=dropdown-menu-content],[data-slot=popover-content],[data-slot=select-content]{max-width:calc(100vw - 20px)!important;max-height:70dvh;overflow:auto}
+ [data-slot=dialog-content] input,[data-slot=dialog-content] textarea,[data-slot=sheet-content] input,.bk-page input:not([type=checkbox]):not([type=radio]),.bk-page textarea:not(.phone-keyboard){font-size:16px}
+ [data-slot=dialog-close]{min-width:32px;min-height:32px;display:grid;place-items:center;top:8px;right:8px}
+ .bk-page:not(.device-workbench)>main>div:first-child,.bk-page:not(.device-workbench)>main>header:first-child{height:auto;min-height:48px;padding:8px 12px}
+ .bk-page:not(.device-workbench)>main>div:first-child>.flex{flex-wrap:wrap;gap:8px}
+ .bk-page:not(.device-workbench)>main{min-width:0}
+ .bk-page [data-slot=card-header]>.flex{flex-wrap:wrap}
+ .bk-page input,.bk-page select,.bk-page [role=combobox]{max-width:100%}
+ .bk-page [role=tablist]{max-width:100%;overflow-x:auto;flex-shrink:0}
+ .bk-page [role=tab]{white-space:nowrap}
+ .bk-page .fixed.bottom-6{bottom:calc(70px + env(safe-area-inset-bottom))}
+}
+@media(max-width:767px){
+ .bk-mobile-table{display:block;min-width:0!important;width:100%;border-collapse:separate}
+ .bk-mobile-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+ .bk-mobile-table tbody{display:block;width:100%}
+ .bk-mobile-table tbody>tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px 12px;padding:12px;border-bottom:1px solid var(--border);width:100%}
+ .bk-mobile-table tbody>tr>td{display:flex;min-width:0;width:auto!important;max-width:100%;flex-wrap:wrap;align-items:center;gap:5px;padding:0!important;white-space:normal;overflow-wrap:anywhere;font-size:12px}
+ .bk-mobile-table td[data-mobile-label]:not([data-mobile-label='']):before{content:attr(data-mobile-label);display:block;flex-basis:100%;color:var(--muted-foreground);font-size:10px}
+ .bk-mobile-table td.bk-wide-cell{grid-column:1/-1;min-height:60px;justify-content:center}
+ .bk-mobile-table td:has(>[role=checkbox]){min-height:32px}
+ .bk-mobile-table td button{min-height:36px}.bk-mobile-table td svg{flex-shrink:0}
+ .bk-mobile-table td>div{min-width:0;max-width:100%;flex-wrap:wrap}
+ .bk-mobile-table td a,.bk-mobile-table td pre{max-width:100%;overflow-wrap:anywhere;white-space:pre-wrap}
+ .bk-page:not(.device-workbench) .min-w-\[600px\],.bk-page:not(.device-workbench) .min-w-\[800px\]{min-width:0}
+ .bk-page:not(.device-workbench)>main>div:first-child button{min-height:36px}
+}

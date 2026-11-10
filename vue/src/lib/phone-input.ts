@@ -1,5 +1,11 @@
 /** Ordered Android input. Text uses the native Unicode clipboard + paste path. */
 export type PhoneRequest = (command: string, data: unknown) => Promise<any>;
+export async function writePhoneText(request: PhoneRequest, text: string, valid: () => boolean) {
+  if (!text || text.length > 16000 || !valid()) throw new Error('Invalid input');
+  await request('clipboard/set', [text]);
+  if (!valid()) throw new Error('Input session changed');
+  await request('device/input/keycode', [0, 279]);
+}
 export function createPhoneInput(request: PhoneRequest, failed: () => void, copyToComputer?: (text: string) => Promise<void>) {
   let generation = 0, pending = 0, text = '', timer: ReturnType<typeof setTimeout> | undefined;
   let tail = Promise.resolve();

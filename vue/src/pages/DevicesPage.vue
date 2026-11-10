@@ -17,6 +17,7 @@ import {
   FolderUp,
   ListFilter,
   LayoutGrid,
+  Smartphone,
   List,
   Pause,
   Play,
@@ -39,7 +40,8 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { HexColorPicker } from "@/components/ui/color-picker";
 import { AddDeviceDialog } from "@/components/devices/add-device-dialog";
 import { DeviceStats } from "@/components/devices/device-stats";
-import LiveDevicePreview from "@/components/devices/LiveDevicePreview.vue";
+import DeviceGallery from "@/components/devices/DeviceGallery.vue";
+import { useMobileViewport } from "@/lib/mobile-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -270,7 +272,10 @@ const loadError = ref<string | null>(null);
 const loading = ref(false);
 const summary = ref({ total: 0, usable: 0, working: 0, offline: 0, ungrouped: 0 });
 const selectedGroupId = ref<GroupFilterId>("all");
-const viewMode = ref<"cards" | "list">("cards");
+const mobile = useMobileViewport();
+const savedView = sessionStorage.getItem('bk-device-view');
+const viewMode = ref<"cards" | "list" | "single">(savedView === 'list' || savedView === 'single' ? savedView : 'cards');
+watch(viewMode, value => sessionStorage.setItem('bk-device-view', value));
 const previewsPaused = ref(false);
 const groupKeyword = ref("");
 
@@ -1194,10 +1199,10 @@ const onTokenConfigOpenChange = (open: boolean) => {
 </script>
 
 <template>
-  <div class="flex h-screen w-full overflow-hidden bg-[#f5f5f7]">
+  <div class="devices-page flex h-screen w-full overflow-hidden bg-[#f5f5f7]">
     <Sidebar />
 
-    <div class="flex h-screen min-w-0 flex-1 flex-col lg:ml-[220px]">
+    <div class="devices-main flex h-screen min-w-0 flex-1 flex-col lg:ml-[220px]">
       <!-- Header -->
       <header class="flex h-14 shrink-0 items-center justify-between border-b border-gray-100 bg-white px-5">
         <h1 class="text-base font-semibold text-gray-900">{{ t.devices.pageTitle }}</h1>
@@ -1235,9 +1240,9 @@ const onTokenConfigOpenChange = (open: boolean) => {
         </div>
       </header>
 
-      <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
+      <div class="devices-body flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
       <DeviceStats
-        class="shrink-0"
+        class="device-stats shrink-0"
         :total="summary.total"
         :usable="summary.usable"
         :working="summary.working"
@@ -1305,7 +1310,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
               </div>
 
               <div class="border-t border-gray-50 p-2.5">
-                <div class="relative">
+                <div class="device-search relative">
                   <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
                   <Input
                     class="h-7 rounded-md border-0 bg-gray-50 pl-8 text-xs text-gray-600 placeholder:text-gray-400"
@@ -1449,9 +1454,9 @@ const onTokenConfigOpenChange = (open: boolean) => {
         </div>
 
         <!-- Device List Panel -->
-        <Card class="h-full min-h-0 min-w-0 gap-0 overflow-hidden rounded-lg border border-gray-100 bg-white py-0 shadow-sm">
+        <Card class="device-list-panel h-full min-h-0 min-w-0 gap-0 overflow-hidden rounded-lg border border-gray-100 bg-white py-0 shadow-sm">
           <!-- List header -->
-          <CardHeader class="gap-3 border-b border-gray-100 px-4 py-3">
+          <CardHeader class="device-list-header gap-3 border-b border-gray-100 px-4 py-3">
             <FeedbackTip v-if="loadError" :message="loadError" variant="error" :compact="false" />
             <FeedbackTip v-if="actionError" :key="actionError.id" :toast-id="actionError.id" :message="actionError.text" variant="error" :compact="false" />
             <FeedbackTip v-if="actionMessage" :key="actionMessage.id" :toast-id="actionMessage.id" :message="actionMessage.text" variant="success" :compact="false" />
@@ -1463,13 +1468,14 @@ const onTokenConfigOpenChange = (open: boolean) => {
                 </Badge>
               </div>
 
+              <Button v-if="mobile" size="sm" variant="ghost" class="h-7 px-2 text-xs" @click="onCreateGroupDialogOpenChange(true)">新建分组</Button>
               <!-- Toolbar -->
-              <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <div class="device-toolbar flex min-w-0 flex-wrap items-center gap-2">
                 <select v-model="selectedGroupId" aria-label="设备分组" class="h-8 max-w-[180px] rounded border px-2 text-xs md:hidden">
                   <option value="all">全部设备</option><option value="ungrouped">未分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
                 </select>
                 <!-- Search -->
-                <div class="relative">
+                <div class="device-search relative">
                   <Search class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     class="h-8 w-[200px] border-gray-200 pl-8 text-xs text-gray-600 placeholder:text-gray-400"
@@ -1559,11 +1565,12 @@ const onTokenConfigOpenChange = (open: boolean) => {
                 </DropdownMenu>
 
                 <!-- View - column toggle -->
-                <div class="inline-flex rounded-md border border-border p-0.5" aria-label="设备视图">
-                  <Button size="sm" :variant="viewMode === 'cards' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'cards'" @click="viewMode = 'cards'"><LayoutGrid class="h-3.5 w-3.5" />卡片</Button>
+                <div class="device-view-switch inline-flex rounded-md border border-border p-0.5" aria-label="设备视图">
+                  <Button size="sm" :variant="viewMode === 'cards' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'cards'" @click="viewMode = 'cards'"><LayoutGrid class="h-3.5 w-3.5" />多卡片</Button>
                   <Button size="sm" :variant="viewMode === 'list' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'list'" @click="viewMode = 'list'"><List class="h-3.5 w-3.5" />列表</Button>
+                  <Button size="sm" :variant="viewMode === 'single' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'single'" @click="viewMode = 'single'"><Smartphone class="h-3.5 w-3.5" />单卡片</Button>
                 </div>
-                <Button v-if="viewMode === 'cards'" size="sm" variant="outline" class="h-8 gap-1.5 text-xs" @click="previewsPaused = !previewsPaused"><component :is="previewsPaused ? Play : Pause" class="h-3.5 w-3.5" />{{ previewsPaused ? '恢复预览' : '暂停预览' }}</Button>
+                <Button v-if="viewMode !== 'list'" size="sm" variant="outline" class="h-8 gap-1.5 text-xs" @click="previewsPaused = !previewsPaused"><component :is="previewsPaused ? Play : Pause" class="h-3.5 w-3.5" />{{ previewsPaused ? '恢复预览' : '暂停预览' }}</Button>
                 <div v-if="viewMode === 'list'">
                   <DropdownMenu>
                     <DropdownMenuTrigger as-child>
@@ -1624,33 +1631,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
                 </Button>
               </EmptyState>
             </div>
-            <div v-else-if="viewMode === 'cards'" class="min-h-0 flex-1 overflow-auto p-4">
-              <div class="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
-                <Checkbox :checked="allFilteredSelected ? true : partialFilteredSelected ? 'indeterminate' : false" @update:checked="onToggleSelectAllFiltered()" :aria-label="t.devices.selectAllFiltered" />
-                <span>选择本页设备</span><span class="ml-auto">点击画面进入远控</span>
-              </div>
-              <div class="grid grid-cols-[repeat(auto-fill,minmax(196px,1fr))] items-start gap-4 pb-14">
-                <article v-for="device in pagedRows" :key="device.id" class="w-full max-w-[240px] overflow-hidden rounded-lg border bg-background transition-shadow hover:shadow-md" :class="selectedIds.has(device.id) ? 'border-orange-400 ring-1 ring-orange-100' : 'border-border'" :data-device-card="device.id">
-                  <div class="flex items-center gap-2 px-3 py-2.5">
-                    <Checkbox :checked="selectedIds.has(device.id)" @update:checked="onToggleDevice(device.id, $event)" :aria-label="`选择 ${device.id}`" />
-                    <span class="min-w-0 flex-1 truncate text-xs font-semibold" :title="device.remark || device.model">{{ device.remark || (device.model !== '-' ? device.model : device.id) }}</span>
-                    <span class="shrink-0 text-[11px]" :class="statusTextColor(device.status)">● {{ getStatusLabel(device.status) }}</span>
-                  </div>
-                  <button type="button" class="block aspect-[9/18] w-full focus-visible:outline-2 focus-visible:outline-orange-500" :aria-label="`远控 ${device.id}`" :disabled="device.status !== 'online'" @click="openControl(device.id)">
-                    <LiveDevicePreview :device-id="device.id" :online="device.status === 'online'" :pending="device.status === 'pending'" :paused="previewsPaused" />
-                  </button>
-                  <div class="space-y-2 px-3 py-2.5">
-                    <p class="truncate text-[11px] text-muted-foreground" :title="device.id">{{ device.id }}</p>
-                    <div class="flex items-center justify-between gap-1"><span class="text-xs text-muted-foreground">{{ androidVersionFromSdk(device.sdk) }}</span><DeviceBattery :device-id="device.id" :online="device.status === 'online'" /></div>
-                    <div class="flex gap-2 border-t border-border pt-2">
-                      <Button v-if="device.status === 'pending'" size="sm" class="h-7 flex-1 text-xs" @click="void onOpenDevice(device)">接入配置</Button>
-                      <Button v-else size="sm" class="h-7 flex-1 bg-orange-500 text-xs text-white hover:bg-orange-600" :disabled="device.status !== 'online'" @click="openControl(device.id)">打开远控</Button>
-                      <Button size="sm" variant="outline" class="h-7 flex-1 text-xs" @click="void onOpenDevice(device)">设备详情</Button>
-                    </div>
-                  </div>
-                </article>
-              </div>
-            </div>
+            <DeviceGallery v-else-if="viewMode !== 'list' || mobile" :devices="pagedRows" :mode="viewMode" :paused="previewsPaused" :selected="selectedIds" @open="openControl" @details="void onOpenDevice($event as DeviceRecord)" @toggle="onToggleDevice" />
             <div v-else class="min-h-0 flex-1 overflow-auto">
               <table class="w-full text-xs border-collapse">
                 <thead class="sticky top-0 z-10 bg-background border-b border-border">
@@ -1821,7 +1802,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
             </div>
 
             <!-- Pagination footer -->
-            <div class="flex h-12 shrink-0 items-center justify-between border-t border-border bg-background px-4">
+            <div class="device-pagination flex h-12 shrink-0 items-center justify-between border-t border-border bg-background px-4">
               <!-- Rows per page -->
               <div class="flex items-center gap-2 text-sm text-muted-foreground">
                 <Select
@@ -1870,7 +1851,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
             </div>
 
             <!-- Floating selection bar -->
-            <div v-if="selectedIds.size > 0" class="absolute bottom-14 left-1/2 z-20 -translate-x-1/2">
+            <div v-if="selectedIds.size > 0" class="device-selection absolute bottom-14 left-1/2 z-20 -translate-x-1/2">
               <div class="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 shadow-sm">
                 <Button
                   variant="ghost"
@@ -2141,3 +2122,23 @@ const onTokenConfigOpenChange = (open: boolean) => {
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+@media(max-width:767px){
+ .devices-main>header{height:42px;padding:0 10px}.devices-main>header button{min-height:36px}
+ .devices-body{padding:5px 6px!important;gap:4px}.device-stats{display:none}
+ .device-list-panel{border:0;box-shadow:none;border-radius:0}
+ .device-list-header{padding:4px 2px!important;gap:4px!important}
+ .device-list-header :deep([data-slot=card-title]){font-size:10px}
+ .device-list-header>div:last-child{gap:3px!important}
+ .device-toolbar{width:100%;gap:4px!important}
+ .device-search{order:-2;flex:1;min-width:0}.device-search input{width:100%;height:36px}
+ .device-toolbar>select{order:-1;width:103px;max-width:103px;height:36px;font-size:11px}
+ .device-view-switch{order:1;flex:1;min-width:0}.device-view-switch button{flex:1;padding:5px;font-size:10px;min-height:32px}
+ .device-toolbar>button{min-height:34px;font-size:10px;padding:4px 6px}
+ .device-toolbar>div:last-child:not(.device-view-switch):not(.device-search){display:none}
+ .device-list-panel :deep([data-slot=card-content]){min-height:0}
+ .device-pagination{height:44px;padding:0 8px;gap:6px}.device-pagination>div:first-child>span{display:none}.device-pagination :deep([role=combobox]){width:54px;min-height:34px;padding:4px}.device-pagination>div:last-child>button{min-height:34px;width:30px}.device-pagination>div:last-child>button:not(:first-of-type):not(:last-of-type):not(:nth-last-of-type(2)):not(:nth-of-type(2)){display:none}.device-pagination>div:last-child>span{font-size:10px;margin:0}
+ .device-selection{width:calc(100% - 12px)}.device-selection>div{flex-wrap:wrap;gap:6px;padding:8px}.device-selection button{min-height:36px}.device-selection :deep([data-orientation=vertical]){display:none}
+}
+</style>

@@ -18,6 +18,7 @@ import {
   LogOut,
   KeyRound,
   Loader2,
+  MoreHorizontal,
 } from "lucide-vue-next";
 import { useTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ const pathname = useHashPathname();
 const router = useHashRouter();
 const { resolvedTheme, setTheme } = useTheme();
 const loggingOut = ref(false);
+const mobileMenu = ref(false);
 const changePwdOpen = ref(false);
 const savingPwd = ref(false);
 const newPassword = ref("");
@@ -147,6 +149,18 @@ const onChangePwdOpenChange = (open: boolean) => {
 </script>
 
 <template>
+  <header class="bk-mobile-header"><BrandIdentity :subtitle="t.common.manageDeviceAnywhere" /><button aria-label="打开账户与更多菜单" @click="mobileMenu = true" class="rounded-full text-sm font-semibold">A</button></header>
+  <nav class="bk-mobile-nav" aria-label="手机后台导航">
+    <a v-for="item in mainNav" :key="item.href" :href="toHashHref(item.href)" :class="{ active: isActive(item.href) }"><component :is="item.icon" /><span>{{ item.label }}</span></a>
+    <button :class="{ active: toolsNav.some(item => isActive(item.href)) }" @click="mobileMenu = true"><MoreHorizontal /><span>更多</span></button>
+  </nav>
+  <Dialog v-model:open="mobileMenu"><DialogContent><DialogHeader><DialogTitle>更多与账户</DialogTitle></DialogHeader><div class="bk-mobile-menu">
+    <a v-for="item in toolsNav" :key="item.href" :href="toHashHref(item.href)" @click="mobileMenu = false"><component :is="item.icon" />{{ item.label }}</a>
+    <a href="/bk-phone-guide.html" target="_blank" rel="noopener"><ClipboardList />手机安装与接入说明</a>
+    <button @click="setTheme(isDark ? 'light' : 'dark')"><component :is="isDark ? Sun : Moon" />{{ isDark ? t.user.lightMode : t.user.darkMode }}</button>
+    <button @click="mobileMenu = false; resetChangePwdDialog(); changePwdOpen = true"><KeyRound />{{ t.user.changePassword }}</button>
+    <button :disabled="loggingOut" @click="handleLogout"><LogOut />{{ t.user.signOut }}</button>
+  </div></DialogContent></Dialog>
   <aside
     class="fixed inset-y-0 left-0 z-30 hidden h-screen w-[220px] shrink-0 border-r border-border bg-background lg:flex lg:flex-col"
   >

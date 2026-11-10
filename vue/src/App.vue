@@ -20,8 +20,10 @@ import { apiRequest } from "@/lib/api";
 import { useHashLocation, useHashRouter } from "@/lib/hash-router";
 import { provideI18n } from "@/lib/i18n";
 import { useTheme } from "@/lib/theme";
+import { responsiveTables as vResponsiveTables, useMobileViewport } from '@/lib/mobile-layout';
 
 provideI18n("zh");
+useMobileViewport();
 const { resolvedTheme } = useTheme();
 
 const location = useHashLocation();
@@ -92,7 +94,7 @@ const rendered = computed(() => {
   >
     Loading...
   </div>
-  <component :is="rendered.component" v-else :key="rendered.key" />
+  <component :is="rendered.component" v-else :key="rendered.key" v-responsive-tables :class="{ 'bk-page': rendered.key !== 'login' }" />
   <Toaster
     :theme="resolvedTheme"
     class="toaster group"

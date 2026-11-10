@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play, Maximize, Minimize } from 'lucide-vue-next';
+import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play, Maximize, Minimize, MessageSquare, MoreHorizontal } from 'lucide-vue-next';
 import { deviceSocket } from '@/lib/device-channel';
 import { startPhoneVideo, type VideoMode } from '@/lib/phone-video';
 import { androidKey, createPhoneInput, type PhoneRequest } from '@/lib/phone-input';
 import { apiRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { fitDisplay } from '@/lib/mobile-layout';
 
-const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number }>();
-const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string] }>();
+const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean }>();
+const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string]; 'hide-tools': []; compose: []; tools: [] }>();
 const canvas = ref<HTMLCanvasElement>();
 const panel = ref<HTMLDivElement>();
 const viewport = ref<HTMLDivElement>();
@@ -16,11 +17,12 @@ const keyboard = ref<HTMLTextAreaElement>();
 const composing = ref(false);
 const input = createPhoneInput((cmd, data) => props.requestCommand(cmd, data), () => emit('log', '键盘操作未完成，请确认输入框、连接及浏览器剪贴板权限后重试'), text => navigator.clipboard.writeText(text));
 function inputText() {
-  if (composing.value || !keyboard.value) return;
+  if (props.textBusy || composing.value || !keyboard.value) return;
   if (props.commandReady) input.insert(keyboard.value.value);
   keyboard.value.value = '';
 }
 function keyboardDown(e: KeyboardEvent) {
+  if (props.textBusy) { e.preventDefault(); return; }
   if (!e.isComposing && e.keyCode !== 229 && (e.ctrlKey || e.metaKey) && !e.altKey && ['c', 'x'].includes(e.key.toLowerCase()) && props.commandReady) {
     e.preventDefault(); input.copy(e.key.toLowerCase() === 'x'); return;
   }
@@ -29,7 +31,7 @@ function keyboardDown(e: KeyboardEvent) {
 }
 function paste(e: ClipboardEvent) {
   e.preventDefault();
-  if (props.commandReady) input.insert(e.clipboardData?.getData('text/plain') ?? '');
+  if (props.commandReady && !props.textBusy) input.insert(e.clipboardData?.getData('text/plain') ?? '');
 }
 function blurInput() { composing.value = false; input.reset(); if (keyboard.value) keyboard.value.value = ''; }
 const viewportSize = ref({ width: 320, height: 600 });
@@ -48,9 +50,8 @@ const mediaRtt = ref<number | null>(null);
 const mediaPath = ref('unknown');
 const screenSize = ref({ width: 540, height: 1194 });
 const canvasStyle = computed(() => {
-  const ratio = screenSize.value.width / screenSize.value.height;
-  const width = Math.max(1, Math.min(viewportSize.value.width, viewportSize.value.height * ratio));
-  return { width: `${width}px`, height: `${width / ratio}px` };
+  const size = fitDisplay(screenSize.value.width, screenSize.value.height, viewportSize.value.width, viewportSize.value.height);
+  return { width: `${size.width}px`, height: `${size.height}px` };
 });
 const enabled = computed(() => props.online && visible.value && !paused.value);
 let dispose: ReturnType<typeof startPhoneVideo> | undefined;
@@ -131,6 +132,9 @@ function send(action: string, event?: PointerEvent) {
 }
 function down(e: PointerEvent) {
   if (e.button !== 0 || pointer !== null) return;
+  // The first tap is a local UI gesture only. Never forward it into an app.
+  if (props.immersive && props.controlsVisible) { emit('hide-tools'); return; }
+  if (props.textBusy) return;
   if (input.busy) { input.flush(); emit('log', '文字正在写入手机，请稍后再点击'); return; }
   if (send('down', e)) { keyboard.value?.focus({ preventScroll: true }); pointer = e.pointerId; canvas.value?.setPointerCapture(e.pointerId); }
 }
@@ -144,6 +148,8 @@ function up(e: PointerEvent) {
   release(); if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId);
 }
 function key(code: number) { emit('command', 'device/input/keycode', [0, code]); }
+function reconnect() { paused.value = false; start(); }
+defineExpose({ reconnect, isTyping: () => input.busy, releaseKeyboard: blurInput, fps, mode, mediaRtt, touchReady });
 function visibility() { visible.value = !document.hidden; }
 function fullscreenChanged() { fullscreen.value = document.fullscreenElement === panel.value; }
 function fullscreenKey(event: KeyboardEvent) {
@@ -181,7 +187,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 </script>
 
 <template>
-  <div ref="panel" class="phone-control overflow-hidden rounded-lg border border-border bg-background">
+  <div ref="panel" class="phone-control overflow-hidden rounded-lg border border-border bg-background" :class="{ immersive, 'controls-hidden': immersive && !controlsVisible }">
     <div class="phone-heading flex items-center justify-between gap-2 border-b px-3 text-xs">
       <span class="font-semibold">实时画面</span>
       <div class="flex items-center gap-2"><span class="mr-1 text-muted-foreground">{{ mode === 'webrtc' ? 'WebRTC' : mode === 'h264' ? 'H.264' : '兼容模式' }}</span>
@@ -189,17 +195,17 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
         <button v-if="canFullscreen" class="screen-action" :title="fullscreen ? '退出全屏' : '全屏查看'" :aria-label="fullscreen ? '退出全屏' : '全屏查看'" @click="toggleFullscreen"><component :is="fullscreen ? Minimize : Maximize" class="h-4 w-4" /></button>
       </div>
     </div>
-    <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-black p-2" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath">
+    <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-background" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath">
       <canvas ref="canvas" :style="canvasStyle" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
       <textarea ref="keyboard" class="phone-keyboard" aria-label="手机文字输入" autocomplete="off" autocapitalize="off" :spellcheck="false" inputmode="none" @keydown="keyboardDown" @input="inputText" @compositionstart="composing = true" @compositionend="composing = false; inputText()" @paste="paste" @blur="blurInput" />
       <div v-if="state !== 'live'" class="absolute inset-0 flex items-center justify-center bg-black/75 px-4 text-center text-sm text-white">{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</div>
     </div>
     <div class="phone-navigation border-t" role="group" aria-label="手机操作">
-      <Button variant="ghost" class="nav-action" aria-label="返回手机上一页" :disabled="!commandReady" @click="key(4)"><ArrowLeft class="h-4 w-4" /><span>返回</span></Button>
-      <Button variant="ghost" class="nav-action" aria-label="手机主页" :disabled="!commandReady" @click="key(3)"><Circle class="h-4 w-4" /><span>主页</span></Button>
-      <Button variant="ghost" class="nav-action" aria-label="手机最近任务" :disabled="!commandReady" @click="key(187)"><Square class="h-4 w-4" /><span>最近任务</span></Button>
-      <Button variant="ghost" class="nav-action" aria-label="唤醒手机" :disabled="!commandReady" @click="emit('command', 'device/wakeup', [])"><Power class="h-4 w-4" /><span>唤醒</span></Button>
-      <Button variant="ghost" class="nav-action" aria-label="重连画面" @click="paused = false; start()"><RotateCw class="h-4 w-4" /><span>重连</span></Button>
+      <Button variant="ghost" class="nav-action" aria-label="返回手机上一页" :disabled="!commandReady || textBusy" @click="key(4)"><ArrowLeft class="h-4 w-4" /><span>返回</span></Button>
+      <Button variant="ghost" class="nav-action" aria-label="手机主页" :disabled="!commandReady || textBusy" @click="key(3)"><Circle class="h-4 w-4" /><span>主页</span></Button>
+      <Button variant="ghost" class="nav-action" aria-label="手机最近任务" :disabled="!commandReady || textBusy" @click="key(187)"><Square class="h-4 w-4" /><span>最近任务</span></Button>
+      <template v-if="immersive"><Button variant="ghost" class="nav-action text-orange-600" aria-label="打开文字输入" :disabled="textBusy" @click="emit('compose')"><MessageSquare class="h-4 w-4" /><span>文字输入</span></Button><Button variant="ghost" class="nav-action" aria-label="打开远控工具" @click="emit('tools')"><MoreHorizontal class="h-4 w-4" /><span>更多</span></Button></template>
+      <template v-else><Button variant="ghost" class="nav-action" aria-label="唤醒手机" :disabled="!commandReady" @click="emit('command', 'device/wakeup', [])"><Power class="h-4 w-4" /><span>唤醒</span></Button><Button variant="ghost" class="nav-action" aria-label="重连画面" @click="reconnect"><RotateCw class="h-4 w-4" /><span>重连</span></Button></template>
     </div>
     <p class="phone-hint text-center text-[11px] text-muted-foreground">{{ touchReady ? '点击或拖动手机画面进行操作' : '触控通道尚未连接' }}</p>
     <p v-if="fullscreenError" role="alert" class="px-3 pb-2 text-xs text-amber-700">{{ fullscreenError }}</p>
@@ -222,4 +228,9 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 .phone-control:fullscreen .phone-navigation { width: min(440px, 100%); align-self: center; }
 .phone-control:fullscreen .phone-status { justify-content: center; }
 .screen-action:focus-visible { outline: 2px solid #f97316; outline-offset: 2px; }
+.phone-control.immersive{border:0;border-radius:0;position:relative;background:var(--background)}
+.immersive .phone-heading,.immersive .phone-hint,.immersive .phone-status{display:none}
+.immersive .screen-viewport{padding:0}
+.immersive .phone-navigation{position:absolute;z-index:20;bottom:max(10px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);width:calc(100% - 20px);max-width:440px;padding:4px;border:1px solid var(--border);background:color-mix(in srgb,var(--background) 96%,transparent);backdrop-filter:blur(10px);border-radius:10px;box-shadow:0 2px 12px #00000010}
+.immersive.controls-hidden .phone-navigation{display:none}
 </style>
