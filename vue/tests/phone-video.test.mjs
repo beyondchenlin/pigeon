@@ -8,6 +8,7 @@ function setup(t, combined = false, extra = {}) {
   t.mock.timers.setTime(100000);
   const sockets = [], peers = [], videos = [], failures = [], frames = [], modes = [], snapshots = [], details = [];
   let ready = 0;
+  const probePixels=extra.probePixels??(()=>new Uint8ClampedArray(24*48*4));delete extra.probePixels;
   class Socket {
     static OPEN = 1;
     constructor(url) { this.url = url; this.readyState = 0; this.sent = []; this.closed = 0; sockets.push(this); }
@@ -28,7 +29,7 @@ function setup(t, combined = false, extra = {}) {
     async getStats() { return new Map(); }
   }
   const doc = { createElement(tag) {
-    if(tag==='canvas')return {getContext:()=>({drawImage(){},clearRect(){},getImageData:()=>({data:new Uint8ClampedArray(24*48*4)})})};
+    if(tag==='canvas')return {getContext:()=>({drawImage(){},clearRect(){},getImageData:()=>({data:probePixels()})})};
     const video = { readyState: 0, currentTime: 0, decoded: 0, videoWidth: 0, videoHeight: 0, async play() {}, pause() {},
       getVideoPlaybackQuality() { return { totalVideoFrames: this.decoded }; },
       requestVideoFrameCallback(cb) { this.callback = cb; return 1; }, cancelVideoFrameCallback() { this.callback = null; },
@@ -257,6 +258,28 @@ test('latest decoded frame is painted when compositor callbacks stall, without d
   t.mock.timers.tick(1000); assert.equal(s.frames.length, 2);
   v.callback(); assert.equal(s.frames.length, 2);
   s.stop(); v.decoded++; t.mock.timers.tick(1000); assert.equal(s.frames.length, 2);
+});
+
+test('a real presentation is processed even if the watchdog already saw its decode count',t=>{
+ const s=setup(t),v=s.videos[0];v.emit();
+ v.decoded++;t.mock.timers.tick(200); // New decode count, old compositor surface.
+ assert.equal(s.frames.length,2);
+ v.currentTime++;v.callback(100300,{presentedFrames:2});
+ assert.equal(s.frames.length,3);assert.equal(s.frames.at(-1),v.currentTime);
+ t.mock.timers.tick(1000);assert.equal(s.frames.length,3);
+});
+
+test('presented input feedback bypasses a recent stale watchdog sample and prevents false rescue',async t=>{
+ let pixels=new Uint8ClampedArray(24*48*4),decoded=1;
+ const s=setup(t,true,{mounted:true,probePixels:()=>pixels}),v=s.videos[0],pc=s.peers[0];
+ pc.getStats=async()=>new Map([['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:decoded,keyFramesDecoded:1,packetsReceived:decoded*10}]]);
+ pc.ontrack({track:{kind:'video'},streams:[{}],receiver:{}});v.emit();
+ t.mock.timers.tick(1000);await flush();s.stop.interact();
+ decoded++;v.decoded++;t.mock.timers.tick(100); // Watchdog sees the old pixels.
+ pixels=new Uint8ClampedArray(24*48*4).fill(255);
+ v.currentTime++;v.callback(performance.now(),{presentedFrames:2});
+ for(let i=0;i<4;i++){t.mock.timers.tick(1000);await flush();}
+ assert.equal(s.snapshots.length,0);assert.equal(pc.closed,undefined);assert.equal(s.modes.at(-1),'webrtc');
 });
 
 test('explicit compatibility mode starts JPEG without a peer', t => {

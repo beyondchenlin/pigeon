@@ -28,7 +28,7 @@ export type VideoOptions = {
 };
 
 type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers' | 'video'> & {
-  frame: (video: HTMLVideoElement) => void;
+  frame: (video: HTMLVideoElement, presented?: boolean) => void;
   ready: () => void;
   failed: (reason: string, connectedWithoutMedia?: boolean) => void;
   stats?: VideoOptions['stats'];
@@ -69,10 +69,13 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   const fail = (reason: string, connectedWithoutMedia=false) => { if (closed) return; close(); o.failed(reason,connectedWithoutMedia); };
   const send = (type: string, data?: unknown) => { if (!closed && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, data })); };
   const local = (candidate: RTCIceCandidateInit | null) => candidate ? send('candidate', candidate) : send('ice-candidates-complete');
-  function drawLatest() {
+  function drawLatest(presented = false) {
     if (closed || !video || (o.video && !video.srcObject)) return;
     const decoded = video.getVideoPlaybackQuality?.().totalVideoFrames;
-    const changed = decoded === undefined ? video.currentTime !== previousTime : decoded !== previousDecoded;
+    // Decoding can run ahead of the compositor. A watchdog may observe the new
+    // count while drawImage(video) still returns the previous surface. Always
+    // inspect the later real presentation callback, even if the count is equal.
+    const changed = presented || (decoded === undefined ? video.currentTime !== previousTime : decoded !== previousDecoded);
     if (video.readyState >= 2 && video.videoWidth && video.videoHeight && changed) {
       previousTime = video.currentTime; previousDecoded = decoded ?? -1;
       health.frame(performance.now());
@@ -82,12 +85,12 @@ export function startRtcVideo(o: RtcOptions): Cancel {
       stalledAt = undefined;
       if (!ready) { ready = true; clearTimeout(first); o.ready(); }
       if (closed) return;
-      try { o.frame(video); } catch { fail('视频绘制失败'); return; }
+      try { o.frame(video, presented); } catch { fail('视频绘制失败'); return; }
     }
   }
-  function render() {
+  function render(_now?: number, metadata?: VideoFrameCallbackMetadata) {
     if (closed || !video) return;
-    lastCallback = performance.now(); drawLatest();
+    lastCallback = performance.now(); drawLatest(metadata !== undefined);
     if (closed) return;
     if (video.requestVideoFrameCallback) frameId = video.requestVideoFrameCallback(render);
     else raf = requestAnimationFrame(render);
@@ -233,9 +236,11 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
   const probeContext=probe.getContext?.('2d',{willReadFrequently:true});
   const clearDetail=()=>{stillVersion++;stillAbort?.abort();if(detail){detail=false;o.detail?.(false);o.canvas.getContext('2d')?.clearRect(0,0,o.canvas.width,o.canvas.height);}};
   const interact=()=>{lastInput=lastInteraction=performance.now();clearDetail();};
-  const inspectFrame=(video:HTMLVideoElement)=>{
+  const inspectFrame=(video:HTMLVideoElement,presented=false)=>{
     const now=performance.now();
-    if(!probeContext||now-sampled<400)return;
+    // A watchdog may just have sampled an old surface. The actual presentation
+    // confirming pending input must bypass this readback rate limit.
+    if(!probeContext||(now-sampled<400&&!(presented&&lastInput>lastMotion)))return;
     sampled=now;probeContext.drawImage(video,0,0,probeWidth,probeHeight);
     const pixels=probeContext.getImageData(0,0,probeWidth,probeHeight).data;
     let changed=0;for(let i=0;signature&&i<pixels.length;i+=4)if(Math.abs(pixels[i]!-signature[i]!)+Math.abs(pixels[i+1]!-signature[i+1]!)+Math.abs(pixels[i+2]!-signature[i+2]!)>45)changed++;
@@ -296,10 +301,10 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
         clearTimeout(retry);retry=setTimeout(applyProfile,500);
       },
       ready: () => { if (disposed) return; rescuing=false; upgrading = false; connectedAt = Date.now(); socket?.(); socket = undefined; o.mode('webrtc'); o.log('已切换 WebRTC 视频'); },
-      frame: video => {
+      frame: (video,presented) => {
         if (disposed) return;
         if(rescuing){rescuing=false;socket?.();socket=undefined;o.mode('webrtc');o.log('WebRTC 新帧已恢复');}
-        inspectFrame(video);
+        inspectFrame(video,presented);
         const { videoWidth: w, videoHeight: h } = video;
         if (!detail&&(o.canvas.width !== w || o.canvas.height !== h)) { o.canvas.width = w; o.canvas.height = h; }
         // Let the browser composite RTC directly. No JS readback/copy is needed
