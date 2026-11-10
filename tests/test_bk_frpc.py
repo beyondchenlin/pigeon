@@ -10,6 +10,16 @@ from ops.install_bk_frps import linux_shell
 
 
 class ForwardingAdapterTests(unittest.TestCase):
+    def test_legacy_install_is_rejected_before_device_mutation(self):
+        from ops.install_bk_frpc import main as install
+        with patch('sys.argv', ['install_bk_frpc.py', '--runtime-root', '/runtime', '--user-root', '/user']), \
+                patch('ops.install_bk_frpc.atomic') as write, \
+                patch('ops.install_bk_frpc.os.getuid', create=True) as uid:
+            with self.assertRaisesRegex(RuntimeError, 'Installation withdrawn'):
+                install()
+            write.assert_not_called()
+            uid.assert_not_called()
+
     def test_activation_waits_for_a_new_pid_when_restarting_same_version(self):
         from types import SimpleNamespace
         with patch('ops.install_bk_frpc.Path') as path, \

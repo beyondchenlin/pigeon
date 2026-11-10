@@ -19,7 +19,7 @@ import weakref
 
 from lamda.extensions import BaseHttpExtension
 from bk_rtc_core import LABEL, PROTOCOL, VERSION, FreshPacketQueue, TouchProtocol
-from bk_android_spawn import create_media_process
+from bk_android_spawn import create_media_process, media_argv
 
 _owner = ContextVar('bk_authenticated_rtc_owner', default=None)
 _installed = False
@@ -97,7 +97,10 @@ class TouchBridge:
         request = self.owner.request
         token = request.headers.get('X-Token')
         if not token: raise ValueError('Cloud-authenticated device session required')
-        port = request.connection.stream.socket.getsockname()[1]
+        # Tornado can detach the HTTP stream after the WebSocket upgrade.
+        # Use the native listener's trusted environment, not the detached stream.
+        port = int(os.environ['PORT'])
+        if not 1 <= port <= 65535: raise ValueError('Invalid native listener port')
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False; context.verify_mode = ssl.CERT_NONE
         headers = {k: request.headers[k] for k in ('X-Token', 'X-ClientId', 'Host', 'Origin') if k in request.headers}
@@ -211,9 +214,18 @@ def install():
     bundle.SignalingWebSocketHandler.on_close = signaling_close
 
     # Replace only the media subprocess path; no global Popen monkeypatch.
+    original_start, original_stop = media.ScreenProcess.start, media.ScreenProcess.stop
     async def process_start(self, scale=.5, quality=50, fps=30, backend=0, display=0, timeout_sec=8):
         if self.is_running(): return
-        command = self._build_command(self.socket_name, scale, quality, fps, backend, display)
+        native = self._build_command(self.socket_name, scale, quality, fps, backend, display)
+        try:
+            command = media_argv(native, os.environ['ROOTDIR'])
+        except ValueError:
+            # Preserve usable native video when this version's command format
+            # is not supported. Report shape/executable only, never full argv.
+            record('native-command-fallback', kind=type(native).__name__, head=str(native[0])[:100])
+            self._bk_native_fallback = True
+            return await original_start(self, scale, quality, fps, backend, display, timeout_sec)
         t = time.monotonic(); record('spawn-begin')
         try:
             self.proc = await create_media_process(command)
@@ -227,6 +239,9 @@ def install():
             await process_stop(self)
             raise
     async def process_stop(self):
+        if getattr(self, '_bk_native_fallback', False):
+            self._bk_native_fallback = False
+            return await original_stop(self)
         task, self._stderr_task = self._stderr_task, None
         if task:
             task.cancel()
@@ -277,7 +292,7 @@ class BkRtcExtension(BaseHttpExtension):
     def setup(config):
         install()
 
-    async def http_get(self):
+    def http_get(self):
         self.write_json(dict(version=VERSION, installed=_installed, uid=os.getuid(), pid=os.getpid(),
             counters=_counters, input_sessions=len(_sessions), readers=[dict(depth=r._packet_queue.qsize(),
             discarded=r._packet_queue.discarded) for r in _readers], events=list(_events)))

@@ -1,5 +1,6 @@
 """Authorization/lifetime tests without installing FIRERPA on the developer PC."""
 import asyncio
+import inspect
 import importlib.util
 import json
 from pathlib import Path
@@ -35,6 +36,9 @@ class Socket:
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
+    def test_native_http_extension_handler_is_sync_for_executor(self):
+        self.assertFalse(inspect.iscoroutinefunction(ext.BkRtcExtension.http_get))
+
     async def asyncSetUp(self):
         self.dc = Channel()
         self.bridge = ext.TouchBridge(types.SimpleNamespace(request=types.SimpleNamespace(headers={})), self.dc)
@@ -55,6 +59,28 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(sys.modules, {'tornado.httpclient': fake_http, 'tornado.websocket': fake_ws}):
             with self.assertRaisesRegex(ValueError, 'authenticated'):
                 await self.bridge.connect()
+
+    async def test_claim_uses_listener_port_after_http_stream_detaches(self):
+        self.bridge.owner.request.headers={'X-Token':'test-only','X-ClientId':'test-client'}
+        fake_http=types.ModuleType('tornado.httpclient')
+        fake_http.HTTPRequest=lambda url,**kw: types.SimpleNamespace(url=url,**kw)
+        fake_ws=types.ModuleType('tornado.websocket'); requests=[]
+        class ReadySocket(Socket):
+            first=True
+            async def read_message(self):
+                if self.first:
+                    self.first=False
+                    return json.dumps({'type':'OK','w':1080,'h':2388})
+                await asyncio.Future()
+        socket=ReadySocket()
+        async def connect(request,**kw):requests.append(request);return socket
+        fake_ws.websocket_connect=connect
+        with patch.dict(sys.modules,{'tornado.httpclient':fake_http,'tornado.websocket':fake_ws}), \
+                patch.dict('os.environ',{'PORT':'65000'}):
+            await self.bridge.connect()
+        self.assertEqual(requests[0].url,'wss://127.0.0.1:65000/ws/screen/touch')
+        self.assertEqual(requests[0].headers['X-Token'],'test-only')
+        self.assertIn({'type':'ready','w':1080,'h':2388},self.dc.sent)
 
     async def test_disconnect_releases_contact_and_cancels_writer(self):
         socket = Socket(); self.bridge.socket = socket

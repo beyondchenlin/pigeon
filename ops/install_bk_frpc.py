@@ -1,7 +1,8 @@
-"""Install/rollback the pinned BK forwarding client on an authorized shell device.
+"""Rollback the legacy BK forwarding replacement on an authorized shell device.
 
 Stage the verified Android ARM64 release and bk_frpc_adapter.py first. No network
 download, configuration/credential copying, root, or whole-service restart here.
+Installation is withdrawn: replacing bin/xfrpc breaks FIRERPA's next cold start.
 """
 import argparse
 import hashlib
@@ -85,6 +86,11 @@ def main():
     parser.add_argument('--activate', action='store_true', help='Replace only the supervised forwarding child')
     parser.add_argument('--rollback', action='store_true')
     args = parser.parse_args()
+    # Fail before touching the device, including its manifests and backups.
+    # A live child-only switch passed prior tests but the native launcher later
+    # rejects the replaced runtime file as "file broken". Keep rollback usable.
+    if not args.rollback:
+        raise RuntimeError('Installation withdrawn: replacing native xfrpc breaks FIRERPA startup; use --rollback')
     if os.getuid() != 2000 or platform.machine() not in ('aarch64', 'arm64'):
         raise RuntimeError('Requires authorized Android ARM64 shell UID 2000')
     root, usr = Path(args.runtime_root).resolve(), Path(args.user_root).resolve()

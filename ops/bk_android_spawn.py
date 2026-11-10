@@ -3,13 +3,31 @@
 Use libc's C-only child setup instead of Python/gRPC fork callbacks in the
 multithreaded phone service. ABI: AOSP bionic libc/include/spawn.h defines both
 action and attribute handles as pointers. This module never changes global
-subprocess behavior or uses a shell. Only the BK media adapter calls it.
+subprocess behavior. Only the BK media adapter calls it with commands from the
+pinned native encoder builder, never with browser-provided command strings.
 """
 import asyncio
 import ctypes as C
 import os
 import signal
+import shutil
 from pathlib import Path
+
+
+def media_argv(command, runtime_root):
+    """Preserve native command semantics while spawning through Bionic."""
+    if not isinstance(command, (list, tuple)): raise ValueError('Expected native media argv')
+    argv = list(command)
+    if not argv or not all(isinstance(value, str) and '\0' not in value for value in argv):
+        raise ValueError('Invalid native media command')
+    if not os.path.isabs(argv[0]):
+        # Native ScreenProcess returns a command with a basename executable.
+        # Ignore the ambient PATH; only the verified runtime/system bins apply.
+        search = (Path(runtime_root)/'lib/python3.12/site-packages/lamda/tool', Path(runtime_root)/'bin', Path('/system/bin'))
+        resolved = shutil.which(argv[0], path=os.pathsep.join(map(str,search)))
+        if resolved is None: raise ValueError('Native media executable was not found')
+        argv[0] = resolved
+    return argv
 
 
 def spawn_pipes(argv):
