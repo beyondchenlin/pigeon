@@ -98,9 +98,9 @@ test('RTC starts alone, failed media opens a JPEG fallback, recovery closes it',
   s.videos[0].emit(); assert.equal(s.modes.at(-1), 'webrtc');
   s.peers[0].connectionState = 'failed'; s.peers[0].onconnectionstatechange();
   const fallback = s.sockets.find(x => x.url.includes('/live'));
-  assert.match(fallback.url, /25@5\/live\?type=mjpeg&backend=0/);
+  assert.match(fallback.url, /25@3\/live\?type=mjpeg&backend=0/);
   assert.equal(s.modes.at(-1), 'mjpeg'); assert.equal(fallback.closed, 0);
-  t.mock.timers.tick(2000); s.videos[1].emit();
+  t.mock.timers.tick(1000); s.videos[1].emit();
   assert.equal(fallback.closed, 1); assert.equal(s.modes.at(-1), 'webrtc');
   const count = s.sockets.length; s.stop(); t.mock.timers.tick(60000);
   assert.equal(s.sockets.length, count); assert.ok(s.sockets.every(x => x.closed === 1));
@@ -113,6 +113,15 @@ test('failed RTC negotiation leaves the existing fallback socket alive', t => {
   t.mock.timers.tick(2000); s.sockets.at(-1).onerror();
   assert.equal(fallback.closed, 0); assert.equal(s.sockets.filter(x => x.url.includes('/live')).length, 1);
   s.stop(); assert.equal(fallback.closed, 1);
+});
+
+test('confirmed command recovery bypasses video backoff without duplicate attempts', t => {
+  const s = setup(t, true); s.sockets[0].onerror();
+  const fallback=s.sockets.find(x=>x.url.includes('/live'));
+  s.stop.recover(); assert.equal(s.peers.length,2); assert.equal(fallback.closed,0);
+  s.stop.recover(); assert.equal(s.peers.length,2);
+  s.videos[1].emit(); t.mock.timers.tick(6000);
+  assert.equal(s.peers.length,2);assert.equal(fallback.closed,1);
 });
 
 test('late ICE credentials cannot create a peer after the page stops', async t => {

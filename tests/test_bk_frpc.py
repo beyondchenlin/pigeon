@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from ops.bk_frpc_adapter import official_args, main
+from ops.bk_frpc_adapter import official_args, main, recovery_config
 from ops.install_bk_frpc import atomic, sha
 from ops.install_bk_frps import linux_shell
 
@@ -31,10 +31,26 @@ class ForwardingAdapterTests(unittest.TestCase):
     def test_exec_replaces_supervised_child_and_preserves_native_config(self):
         with patch.dict(os.environ, {'USRDIR':'/data/local/tmp/usr'}), \
                 patch('sys.argv', ['xfrpc', '-f', '-c', '/device-specific.toml']), \
+                patch('ops.bk_frpc_adapter.write_recovery_config', return_value='/derived.json') as derive, \
                 patch('os.execv') as execute:
             main()
         binary=str(Path('/data/local/tmp/usr')/'phone-pilot/frpc-0.72.0-android-arm64')
-        execute.assert_called_once_with(binary, [binary, '-c', '/device-specific.toml'])
+        derive.assert_called_once()
+        execute.assert_called_once_with(binary, [binary, '-c', '/derived.json'])
+
+    def test_recovery_overrides_preserve_native_auth_and_device_routing(self):
+        with tempfile.TemporaryDirectory(prefix='bk-recovery-test-') as directory:
+            p=Path(directory)/'fwd.toml'
+            original='serverAddr="host"\nserverPort=7000\n[auth]\ntoken="test-secret"\n[metadatas]\ndevice="one"\n[transport.tls]\nenable=true\n[[proxies]]\nname="lamda"\ntype="tcp"\nlocalPort=1234\n'
+            p.write_text(original)
+            c=recovery_config(p)
+            self.assertEqual(c['auth'], {'token':'test-secret'})
+            self.assertEqual(c['metadatas'], {'device':'one'})
+            self.assertEqual(c['proxies'][0]['localPort'],1234)
+            self.assertTrue(c['transport']['tls']['enable'])
+            self.assertEqual(c['transport']['heartbeatTimeout'],10)
+            self.assertFalse(c['loginFailExit'])
+            self.assertEqual(p.read_text(), original)
 
     def test_atomic_replacement_and_recovery_content(self):
         with tempfile.TemporaryDirectory(prefix='bk-frpc-unit-') as directory:

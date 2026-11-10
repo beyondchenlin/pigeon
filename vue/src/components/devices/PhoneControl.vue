@@ -3,14 +3,32 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play, Maximize, Minimize } from 'lucide-vue-next';
 import { deviceSocket } from '@/lib/device-channel';
 import { startPhoneVideo, type VideoMode } from '@/lib/phone-video';
+import { androidKey, createPhoneInput, type PhoneRequest } from '@/lib/phone-input';
 import { apiRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 
-const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; rotation?: number }>();
+const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number }>();
 const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string] }>();
 const canvas = ref<HTMLCanvasElement>();
 const panel = ref<HTMLDivElement>();
 const viewport = ref<HTMLDivElement>();
+const keyboard = ref<HTMLTextAreaElement>();
+const composing = ref(false);
+const input = createPhoneInput((cmd, data) => props.requestCommand(cmd, data), () => emit('log', '文字输入未完成，请确认手机输入框和连接后重试'));
+function inputText() {
+  if (composing.value || !keyboard.value) return;
+  if (props.commandReady) input.insert(keyboard.value.value);
+  keyboard.value.value = '';
+}
+function keyboardDown(e: KeyboardEvent) {
+  const mapped = androidKey(e);
+  if (mapped && props.commandReady) { e.preventDefault(); input.key(...mapped); }
+}
+function paste(e: ClipboardEvent) {
+  e.preventDefault();
+  if (props.commandReady) input.insert(e.clipboardData?.getData('text/plain') ?? '');
+}
+function blurInput() { composing.value = false; input.reset(); if (keyboard.value) keyboard.value.value = ''; }
 const viewportSize = ref({ width: 320, height: 600 });
 const fullscreen = ref(false);
 const fullscreenError = ref('');
@@ -32,7 +50,8 @@ const canvasStyle = computed(() => {
   return { width: `${width}px`, height: `${width / ratio}px` };
 });
 const enabled = computed(() => props.online && visible.value && !paused.value);
-let dispose: (() => void) | undefined;
+let dispose: ReturnType<typeof startPhoneVideo> | undefined;
+let recoverTouch: (() => void) | undefined;
 let retry: ReturnType<typeof setTimeout> | undefined;
 let touch: WebSocket | undefined;
 let dimensions = { width: 0, height: 0 };
@@ -49,9 +68,9 @@ function release() {
   pointer = null;
 }
 function stop() {
-  generation++; release(); clearTimeout(retry); clearInterval(frameTimer);
+  generation++; release(); blurInput(); clearTimeout(retry); clearInterval(frameTimer);
   touchDispose?.(); touchDispose = undefined; dispose?.(); dispose = undefined;
-  touch = undefined; touchReady.value = false; fps.value = 0; mediaRtt.value = null; mediaPath.value = 'unknown';
+  touch = undefined; recoverTouch = undefined; touchReady.value = false; fps.value = 0; mediaRtt.value = null; mediaPath.value = 'unknown';
 }
 function start() {
   stop();
@@ -64,16 +83,19 @@ function start() {
     touchDispose?.();
     const ws = new WebSocket(deviceSocket(props.deviceId, '/ws/screen/touch')); touch = ws;
     let closed = false;
-    touchDispose = () => { closed = true; ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); };
+    let handshake: ReturnType<typeof setTimeout> | undefined;
+    touchDispose = () => { closed = true; clearTimeout(handshake); ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); };
     const recover = () => {
       if (closed || !valid()) return; release(); touchReady.value = false; touchDispose?.();
       emit('log', '触控通道中断，正在恢复');
-      retry = setTimeout(connectTouch, Math.min(8000, 300 * 2 ** Math.min(touchAttempts++, 5)));
+      retry = setTimeout(connectTouch, touchAttempts++ < 15 ? 1000 : 5000);
     };
     ws.onopen = () => { if (valid()) ws.send(JSON.stringify({ action: 'reset' })); };
-    ws.onmessage = e => { if (!valid()) return; try { const m = JSON.parse(e.data); if (m.type === 'OK' && m.w > 0 && m.h > 0) { dimensions = { width: m.w, height: m.h }; touchReady.value = true; touchAttempts = 0; } } catch {} };
+    ws.onmessage = e => { if (!valid()) return; try { const m = JSON.parse(e.data); if (m.type === 'OK' && m.w > 0 && m.h > 0) { clearTimeout(handshake); dimensions = { width: m.w, height: m.h }; touchReady.value = true; touchAttempts = 0; } } catch {} };
     ws.onclose = ws.onerror = recover;
+    handshake = setTimeout(recover, 5000);
   };
+  recoverTouch = () => { if (!touchReady.value) { clearTimeout(retry); connectTouch(); } };
   connectTouch();
   dispose = startPhoneVideo({
     url: path => deviceSocket(props.deviceId, path), canvas: canvas.value,
@@ -104,7 +126,11 @@ function send(action: string, event?: PointerEvent) {
   }
   touch.send(JSON.stringify(payload)); return true;
 }
-function down(e: PointerEvent) { if (e.button !== 0 || pointer !== null) return; if (send('down', e)) { pointer = e.pointerId; canvas.value?.setPointerCapture(e.pointerId); } }
+function down(e: PointerEvent) {
+  if (e.button !== 0 || pointer !== null) return;
+  if (input.busy) { input.flush(); emit('log', '文字正在写入手机，请稍后再点击'); return; }
+  if (send('down', e)) { keyboard.value?.focus({ preventScroll: true }); pointer = e.pointerId; canvas.value?.setPointerCapture(e.pointerId); }
+}
 function move(e: PointerEvent) {
   if (pointer !== e.pointerId) return; lastMove = e;
   if (!moveRaf) moveRaf = requestAnimationFrame(() => { moveRaf = 0; if (lastMove && (touch?.bufferedAmount ?? 0) < 32768) send('move', lastMove); lastMove = undefined; });
@@ -131,6 +157,12 @@ async function toggleFullscreen() {
 }
 watch(enabled, start);
 watch(() => props.rotation, start);
+let wasConnected = false;
+watch(() => props.commandReady, ready => {
+  if (!ready) { blurInput(); return; }
+  if (wasConnected) { recoverTouch?.(); dispose?.recover(); }
+  wasConnected = true;
+});
 onMounted(() => {
   document.addEventListener('visibilitychange', visibility);
   document.addEventListener('fullscreenchange', fullscreenChanged);
@@ -156,6 +188,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
     </div>
     <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-black p-2" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath">
       <canvas ref="canvas" :style="canvasStyle" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
+      <textarea ref="keyboard" class="phone-keyboard" aria-label="手机文字输入" autocomplete="off" autocapitalize="off" :spellcheck="false" inputmode="none" @keydown="keyboardDown" @input="inputText" @compositionstart="composing = true" @compositionend="composing = false; inputText()" @paste="paste" @blur="blurInput" />
       <div v-if="state !== 'live'" class="absolute inset-0 flex items-center justify-center bg-black/75 px-4 text-center text-sm text-white">{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</div>
     </div>
     <div class="phone-navigation border-t" role="group" aria-label="手机操作">
@@ -177,6 +210,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 .screen-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 4px; }
 .screen-action:hover { background: var(--muted); }
 .screen-viewport { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.phone-keyboard { position: absolute; bottom: 8px; left: 50%; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; pointer-events: none; }
 .phone-navigation { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px 7px 0; flex-shrink: 0; }
 .phone-navigation .nav-action { height: 46px; padding: 4px 0; gap: 4px; flex-direction: column; font-size: 10px; line-height: 14px; font-weight: 400; }
 .phone-hint { padding: 5px 8px 9px; flex-shrink: 0; }

@@ -16,7 +16,7 @@ const record = ref<Record<string, any>>({});
 const recordError = ref('');
 const online = computed(() => record.value.state === 'online');
 const { data, stale, sampledTime, loading, refresh } = useDeviceTelemetry(id, online);
-const { status, info, displays, connected, stale: statusStale, sampled, logs, command, log } = useDeviceChannel(id, online);
+const { status, info, displays, connected, stale: statusStale, sampled, logs, command, requestCommand, log } = useDeviceChannel(id, online);
 const tab = ref('properties');
 const tabs = [{ id: 'properties', label: '设备属性' }, { id: 'performance', label: '性能' }, { id: 'files', label: '文件' }, { id: 'logs', label: '连接日志' }];
 const manufacturer = computed(() => data.value.system?.manufacturer || record.value.brand || '');
@@ -125,7 +125,7 @@ onBeforeUnmount(() => { disposed = true; controller?.abort(); clearInterval(time
       </header>
       <p v-if="recordError" role="alert" class="mx-4 mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{{ recordError }} <button class="underline" @click="load">重试</button></p>
       <div class="workbench-layout">
-        <PhoneControl class="workbench-phone" :device-id="id" :online="online" :command-ready="connected" :rotation="rotation" @command="send" @log="log" />
+        <PhoneControl class="workbench-phone" :device-id="id" :online="online" :command-ready="connected" :request-command="requestCommand" :rotation="rotation" @command="send" @log="log" />
         <section class="workbench-details rounded-lg border border-border bg-background" aria-label="设备信息与工具">
           <div class="details-toolbar border-b border-border">
             <div class="details-tabs" role="tablist" aria-label="设备信息">
