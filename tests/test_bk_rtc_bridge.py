@@ -104,9 +104,15 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_lease_expiry_closes_stuck_contact(self):
         socket = Socket(); self.bridge.socket = socket
+        self.bridge.protocol.pressed = True
         self.bridge.last_seen = ext.time.monotonic()-3
         await asyncio.sleep(.55)
         self.assertTrue(self.bridge.closed)
         self.assertEqual(socket.sent[-1]['action'], 'up')
+
+    async def test_idle_lease_does_not_close_healthy_peer(self):
+        self.bridge.socket=Socket();self.bridge.last_seen=ext.time.monotonic()-60
+        await asyncio.sleep(.55)
+        self.assertFalse(self.bridge.closed)
 
 if __name__ == '__main__': unittest.main()

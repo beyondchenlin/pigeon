@@ -1,11 +1,11 @@
-export type VideoPreference = { resolution: 'auto' | 240 | 360 | 480 | 720; fps: 5 | 10 | 15 | 20 };
+export type VideoPreference = { resolution: 'auto' | 240 | 360 | 480 | 720; fps: 10 | 15 | 20 };
 export type VideoProfile = { short: number; fps: number };
 export type NetworkSample = { rttMs: number | null; loss: number; bufferMs: number; decodeMs: number };
 export const DEFAULT_VIDEO: VideoPreference = { resolution: 'auto', fps: 10 };
 export function videoPreference(value: unknown): VideoPreference {
   const x = value as Partial<VideoPreference> | null;
   return { resolution: x && ['auto',240,360,480,720].includes(x.resolution!) ? x.resolution! : 'auto',
-    fps: x && [5,10,15,20].includes(x.fps!) ? x.fps! : 10 };
+    fps: x && [10,15,20].includes(x.fps!) ? x.fps! : 10 };
 }
 export function captureScale(short: number, width: number, height: number) {
   const edge = Math.min(width, height);
@@ -18,7 +18,7 @@ export class VideoPolicy {
   bad = 0; good = 0; lastChange = -Infinity;
   profile(preference: VideoPreference): VideoProfile {
     if (preference.resolution !== 'auto') return { short: preference.resolution, fps: preference.fps };
-    return [{ short:240,fps:5 },{ short:360,fps:10 },{ short:480,fps:10 }][this.level]!;
+    return [{ short:240,fps:10 },{ short:360,fps:10 },{ short:480,fps:10 }][this.level]!;
   }
   sample(s: NetworkSample, now: number): boolean {
     const bad = s.loss > .03 || s.bufferMs > 180 || s.decodeMs > 60 || (s.rttMs ?? 0) > 300;

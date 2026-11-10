@@ -252,7 +252,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
     </div>
     <fieldset class="grid grid-cols-2 gap-3 rounded border p-3"><legend class="px-1 text-sm font-medium">传屏设置</legend>
       <label class="flex flex-col gap-1 text-sm">清晰度<select v-model="videoSettings.resolution" class="rounded border bg-background p-2" aria-label="传屏清晰度"><option value="auto">自动 · 响应优先</option><option :value="240">240 · 省流</option><option :value="360">360 · 流畅</option><option :value="480">480 · 均衡</option><option :value="720">720 · 清晰</option></select></label>
-      <label class="flex flex-col gap-1 text-sm">帧率上限<select v-model="videoSettings.fps" :disabled="videoSettings.resolution==='auto'" class="rounded border bg-background p-2 disabled:opacity-50" aria-label="传屏帧率"><option :value="5">5 帧/秒</option><option :value="10">10 帧/秒</option><option :value="15">15 帧/秒</option><option :value="20">20 帧/秒</option></select></label>
+      <label class="flex flex-col gap-1 text-sm">帧率上限<select v-model="videoSettings.fps" :disabled="videoSettings.resolution==='auto'" class="rounded border bg-background p-2 disabled:opacity-50" aria-label="传屏帧率"><option :value="10">10 帧/秒</option><option :value="15">15 帧/秒</option><option :value="20">20 帧/秒</option></select></label>
       <p class="col-span-2 text-xs text-muted-foreground">自动档按网络调整；画面静止后补充清晰画面，操作时立即恢复实时画面。分辨率按短边等比例缩放。当前请求 {{ phone?.videoProfile.short ?? 360 }} / {{ phone?.videoProfile.fps ?? 10 }} FPS。</p>
     </fieldset>
     <p class="text-xs text-muted-foreground">点击画面一次只隐藏工具；收起后正常操作手机。右侧“工具”可随时恢复。</p><p class="text-xs text-muted-foreground">{{ phone?.mode === 'webrtc' ? 'WebRTC' : '兼容传屏' }} · {{ phone?.fps ?? 0 }} FPS · 媒体 RTT {{ phone?.mediaRtt ?? '—' }} ms</p></DialogContent></Dialog>

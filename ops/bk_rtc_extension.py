@@ -130,7 +130,7 @@ class TouchBridge:
     async def reader(self):
         while not self.closed:
             message = await self.socket.read_message()
-            if message is None: self.close(); return
+            if message is None: self.close('native-touch-closed'); return
             # Conflicting native controller / changed display must renegotiate.
             try:
                 m = json.loads(message)
@@ -150,7 +150,9 @@ class TouchBridge:
     async def watchdog(self):
         while not self.closed:
             await asyncio.sleep(.5)
-            if time.monotonic() - self.last_seen > 2.5:
+            # The short lease prevents a stuck finger, not long idle viewing.
+            # ICE/peer lifecycle still closes the transport after network loss.
+            if time.monotonic() - self.last_seen > 2.5 and (self.protocol.pressed or self.socket is None):
                 self.close('lease-expired')
 
     def close(self, reason='channel-closed'):

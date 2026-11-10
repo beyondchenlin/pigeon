@@ -4,7 +4,7 @@ import {VideoPolicy,videoPreference,captureScale} from '../src/lib/video-policy.
 test('safe auto default, manual profile and aspect-preserving short edge',()=>{
   assert.deepEqual(videoPreference(null),{resolution:'auto',fps:10});
   assert.deepEqual(videoPreference({resolution:999,fps:999}),{resolution:'auto',fps:10});
-  assert.deepEqual(new VideoPolicy().profile(videoPreference({resolution:240,fps:5})),{short:240,fps:5});
+  assert.deepEqual(new VideoPolicy().profile(videoPreference({resolution:240,fps:5})),{short:240,fps:10});
   assert.equal(captureScale(360,1080,2388),1/3);assert.equal(captureScale(360,2388,1080),1/3);
   assert.equal(captureScale(720,320,480),1);
 });

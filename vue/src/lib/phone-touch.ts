@@ -95,7 +95,9 @@ export function createPhoneTouch(o: Options) {
     const opened = () => { lastRx = performance.now(); heartbeat = setInterval(() => {
       if (dc !== channel || disposed) return;
       const now = performance.now(), oldest = pending.values().next().value;
-      if (channel.readyState === 'closed' || now - lastRx > 2500 || (oldest !== undefined && now - oldest > 1000)) { failDc(); return; }
+      // An idle/background page may throttle timers. The short lease protects
+      // a held contact, not an otherwise healthy idle DTLS connection.
+      if (channel.readyState === 'closed' || (now - lastRx > 2500 && (gesture !== 'none' || route !== 'p2p')) || (oldest !== undefined && now - oldest > 1000)) { failDc(); return; }
       if (channel.readyState === 'open') {
         try { channel.send(JSON.stringify({ type: 'ping', id: now })); } catch { failDc(); }
       }

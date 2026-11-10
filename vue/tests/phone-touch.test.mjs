@@ -77,6 +77,13 @@ test('missing application acknowledgements expires a held gesture', t => {
   assert.equal(dc.readyState, 'closed'); assert.equal(s.states.at(-1), false);
 });
 
+test('idle timer throttling preserves P2P but a subsequent unacknowledged contact still expires',t=>{
+  const s=setup(t),dc=s.activate();t.mock.timers.tick(10000);
+  assert.equal(dc.readyState,'open');assert.equal(s.routes.at(-1),'p2p');
+  dc.receive({type:'pong',id:Date.now()});assert.equal(s.touch.send(down),true);
+  t.mock.timers.tick(1500);assert.equal(dc.readyState,'closed');
+});
+
 test('slow ICE does not prematurely kill a connecting channel', t => {
   const s = setup(t); const dc = new s.Channel(); s.touch.attach(dc);
   t.mock.timers.tick(6000); assert.equal(dc.readyState, 'connecting');
