@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {VideoPolicy,videoPreference,captureScale} from '../src/lib/video-policy.ts';
+test('safe auto default, manual profile and aspect-preserving short edge',()=>{
+  assert.deepEqual(videoPreference(null),{resolution:'auto',fps:10});
+  assert.deepEqual(videoPreference({resolution:999,fps:999}),{resolution:'auto',fps:10});
+  assert.deepEqual(new VideoPolicy().profile(videoPreference({resolution:240,fps:5})),{short:240,fps:5});
+  assert.equal(captureScale(360,1080,2388),1/3);assert.equal(captureScale(360,2388,1080),1/3);
+  assert.equal(captureScale(720,320,480),1);
+});
+test('congestion lowers quickly, recovery requires sustained good samples without oscillation',()=>{
+  const p=new VideoPolicy(),bad={rttMs:400,loss:0,bufferMs:0,decodeMs:0},good={...bad,rttMs:60};
+  assert.equal(p.sample(bad,0),false);assert.equal(p.sample(bad,2000),true);assert.equal(p.level,0);
+  for(let i=0;i<14;i++)assert.equal(p.sample(good,4000+i*2000),false);
+  assert.equal(p.sample(good,32000),true);assert.equal(p.level,1);
+  assert.equal(p.sample(bad,33000),false);assert.equal(p.sample(bad,34000),false);
+  assert.equal(p.level,1);assert.equal(p.sample(bad,42000),true);
+});

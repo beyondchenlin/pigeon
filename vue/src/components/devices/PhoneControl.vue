@@ -8,8 +8,10 @@ import { apiRequest } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { fitDisplay } from '@/lib/mobile-layout';
 import { createPhoneTouch, type TouchPayload } from '@/lib/phone-touch';
+import { phoneFrame } from '@/lib/phone-frame';
+import { type VideoPreference, type VideoProfile } from '@/lib/video-policy';
 
-const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean }>();
+const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean; videoPreference?: VideoPreference }>();
 const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string]; 'hide-tools': []; compose: []; tools: [] }>();
 const canvas = ref<HTMLCanvasElement>();
 const video = ref<HTMLVideoElement>();
@@ -22,10 +24,12 @@ const composing = ref(false);
 const input = createPhoneInput((cmd, data) => props.requestCommand(cmd, data), () => emit('log', '键盘操作未完成，请确认输入框、连接及浏览器剪贴板权限后重试'), text => navigator.clipboard.writeText(text));
 function inputText() {
   if (props.textBusy || composing.value || !keyboard.value) return;
+  dispose?.interact();
   if (props.commandReady) input.insert(keyboard.value.value);
   keyboard.value.value = '';
 }
 function keyboardDown(e: KeyboardEvent) {
+  dispose?.interact();
   if (props.textBusy) { e.preventDefault(); return; }
   if (!e.isComposing && e.keyCode !== 229 && (e.ctrlKey || e.metaKey) && !e.altKey && ['c', 'x'].includes(e.key.toLowerCase()) && props.commandReady) {
     e.preventDefault(); input.copy(e.key.toLowerCase() === 'x'); return;
@@ -34,6 +38,7 @@ function keyboardDown(e: KeyboardEvent) {
   if (mapped && props.commandReady) { e.preventDefault(); input.key(...mapped); }
 }
 function paste(e: ClipboardEvent) {
+  dispose?.interact();
   e.preventDefault();
   if (props.commandReady && !props.textBusy) input.insert(e.clipboardData?.getData('text/plain') ?? '');
 }
@@ -52,6 +57,8 @@ const visible = ref(!document.hidden);
 const mode = ref<VideoMode>('h264');
 const mediaRtt = ref<number | null>(null);
 const mediaPath = ref('unknown');
+const detailFrame = ref(false);
+const videoProfile = ref<VideoProfile>({short:360,fps:10});
 const screenSize = ref({ width: 540, height: 1194 });
 const canvasStyle = computed(() => {
   const size = fitDisplay(screenSize.value.width, screenSize.value.height, viewportSize.value.width, viewportSize.value.height);
@@ -78,7 +85,7 @@ function stop() {
   generation++; release(); blurInput(); clearInterval(frameTimer);
   touch?.close(); dispose?.(); dispose = undefined;
   touch = undefined; touchReady.value = false; fps.value = 0; mediaRtt.value = null; mediaPath.value = 'unknown';
-  inputTransport.value = 'none'; inputRtt.value = null;
+  inputTransport.value = 'none'; inputRtt.value = null; detailFrame.value = false;
 }
 function start() {
   stop();
@@ -93,9 +100,14 @@ function start() {
     stats: (route, rtt) => { if (valid()) { inputTransport.value = route; inputRtt.value = rtt; } }
   });
   dispose = startPhoneVideo({
+    interactionBusy: () => pointer !== null || input.busy || !!props.textBusy,
     url: path => deviceSocket(props.deviceId, path), canvas: canvas.value, video: nativeVideo ? video.value : undefined,
     decoderUrl: new URL(`/d/${encodeURIComponent(props.deviceId)}/static/js/decoder.js`, location.href).href,
     webrtc: new URLSearchParams(location.search).get('transport') !== 'ws',
+    preference: props.videoPreference, displaySize: () => dimensions,
+    snapshot: (short,signal) => phoneFrame(props.deviceId,short,signal),
+    detail: active => { if(valid())detailFrame.value=active; },
+    profile: value => { if(valid())videoProfile.value=value; },
     inputChannel: channel => { if (valid() && touch) touch.attach(channel); else channel.close(); },
     loadIceServers: async () => {
       const response = await apiRequest<{ iceServers: RTCIceServer[] }>(`/api/v1/device/${encodeURIComponent(props.deviceId)}/ice`, { signal: AbortSignal.timeout(3000) });
@@ -111,6 +123,7 @@ function start() {
 }
 function send(action: TouchPayload['action'], event?: PointerEvent) {
   if (!touchReady.value || !touch || state.value !== 'live') return false;
+  dispose?.interact();
   let payload: TouchPayload = { action, id: 0 };
   if (event && canvas.value) {
     const rect = canvas.value.getBoundingClientRect();
@@ -139,9 +152,9 @@ function up(e: PointerEvent) {
   if (lastMove && (touch?.bufferedAmount ?? 0) < 32768) send('move', lastMove);
   release(); if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId);
 }
-function key(code: number) { emit('command', 'device/input/keycode', [0, code]); }
+function key(code: number) { dispose?.interact(); emit('command', 'device/input/keycode', [0, code]); }
 function reconnect() { paused.value = false; start(); }
-defineExpose({ reconnect, isTyping: () => input.busy, releaseKeyboard: blurInput, fps, mode, mediaRtt, touchReady });
+defineExpose({ reconnect, interact: () => dispose?.interact(), isTyping: () => input.busy, releaseKeyboard: blurInput, fps, mode, mediaRtt, touchReady, videoProfile });
 function visibility() { visible.value = !document.hidden; }
 function fullscreenChanged() { fullscreen.value = document.fullscreenElement === panel.value; }
 function fullscreenKey(event: KeyboardEvent) {
@@ -158,6 +171,8 @@ async function toggleFullscreen() {
 }
 watch(enabled, start);
 watch(() => props.rotation, start);
+watch(() => props.videoPreference, start, {deep:true});
+watch(() => props.textBusy, () => dispose?.interact());
 let wasConnected = false;
 watch(() => props.commandReady, ready => {
   if (!ready) { blurInput(); return; }
@@ -189,7 +204,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
     </div>
     <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-background" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath" :data-input-transport="inputTransport" :data-input-rtt="inputRtt">
       <video ref="video" :style="canvasStyle" class="rtc-video" :class="{ 'rtc-visible': nativeVideo && mode === 'webrtc' && state === 'live' }" autoplay muted playsinline disablepictureinpicture aria-hidden="true" />
-      <canvas ref="canvas" :style="canvasStyle" :class="{ 'rtc-input': nativeVideo && mode === 'webrtc' && state === 'live' }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
+      <canvas ref="canvas" :style="canvasStyle" :class="{ 'rtc-input': nativeVideo && mode === 'webrtc' && state === 'live', 'detail-frame':detailFrame }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
       <textarea ref="keyboard" class="phone-keyboard" aria-label="手机文字输入" autocomplete="off" autocapitalize="off" :spellcheck="false" inputmode="none" @keydown="keyboardDown" @input="inputText" @compositionstart="composing = true" @compositionend="composing = false; inputText()" @paste="paste" @blur="blurInput" />
       <div v-if="state !== 'live'" class="absolute inset-0 flex items-center justify-center bg-black/75 px-4 text-center text-sm text-white">{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</div>
     </div>
@@ -215,6 +230,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 .rtc-video { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; }
 .rtc-video.rtc-visible { opacity: 1; }
 .rtc-input { opacity: 0; }
+.rtc-input.detail-frame { opacity: 1; }
 .phone-keyboard { position: absolute; bottom: 8px; left: 50%; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; pointer-events: none; }
 .phone-navigation { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px 7px 0; flex-shrink: 0; }
 .phone-navigation .nav-action { height: 46px; padding: 4px 0; gap: 4px; flex-direction: column; font-size: 10px; line-height: 14px; font-weight: 400; }

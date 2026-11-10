@@ -28,3 +28,4 @@ pyinotify
 pottery==3.0.1
 Cython==3.0.10
 pem==23.1.0
+Pillow==13.0.0

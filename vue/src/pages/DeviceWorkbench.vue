@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { ArrowLeft, ExternalLink, RefreshCw, MoreHorizontal, Maximize, Minimize, Minimize2, X, Smartphone, Battery, Monitor, Cpu, Wifi, AppWindow, LockKeyhole, LockKeyholeOpen, Sun, Moon, Copy, Check, ChevronRight } from 'lucide-vue-next';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import { apiRequest } from '@/lib/api';
 import { useHashPathname, useHashRouter } from '@/lib/hash-router';
 import { useDeviceTelemetry, bytes } from '@/lib/device-telemetry';
 import { useDeviceChannel } from '@/lib/device-channel';
+import { videoPreference, DEFAULT_VIDEO } from '@/lib/video-policy';
 
 const pathname = useHashPathname();
 const id = computed(() => pathname.value.startsWith('/control/') ? decodeURIComponent(pathname.value.split('/').pop() || '') : window.location.pathname.match(/^\/d\/([a-z0-9]+)\/$/)?.[1] || decodeURIComponent(pathname.value.split('/').pop() || ''));
@@ -20,6 +21,9 @@ const recordError = ref('');
 const mobile = useMobileViewport();
 const controlsVisible = ref(true);
 const phone = ref<InstanceType<typeof PhoneControl>>();
+const videoSettings = ref({...DEFAULT_VIDEO});
+try { videoSettings.value=videoPreference(JSON.parse(localStorage.getItem('bk-video-preference')||'null')); } catch { /* Use automatic defaults. */ }
+watch(videoSettings,value=>{try{localStorage.setItem('bk-video-preference',JSON.stringify(videoPreference(value)));}catch{/* Private browsers may disable storage. */}},{deep:true});
 const detailsElement = ref<HTMLElement>();
 const toolsOpen = ref(false), composerOpen = ref(false), switchOpen = ref(false), textBusy = ref(false);
 const actionNotice = ref('');
@@ -159,7 +163,7 @@ async function copyId() {
   copyTimer = setTimeout(() => { copied.value = false; copyMessage.value = ''; }, 3000);
 }
 function selectTab(index: number) { const item = tabs[(index + tabs.length) % tabs.length]; if (item) { tab.value = item.id; document.getElementById(`tab-${item.id}`)?.focus(); } }
-function send(cmd: string, payload: unknown) { if (command(cmd, payload)) log(cmd === 'device/wakeup' ? '已发送唤醒指令' : '已发送手机导航指令'); }
+function send(cmd: string, payload: unknown) { phone.value?.interact(); if (command(cmd, payload)) log(cmd === 'device/wakeup' ? '已发送唤醒指令' : '已发送手机导航指令'); }
 onMounted(() => { document.addEventListener('keydown', escapeTools); document.addEventListener('fullscreenchange', fullscreenChanged); fullscreenChanged(); void load(); timer = setInterval(() => void load(), 15000); });
 onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); document.removeEventListener('fullscreenchange', fullscreenChanged); if (ownsFullscreen && document.fullscreenElement === document.documentElement) void document.exitFullscreen().catch(() => {}); disposed = true; controller?.abort(); clearInterval(timer); clearTimeout(copyTimer); });
 </script>
@@ -180,7 +184,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
       </header>
       <p v-if="recordError" role="alert" class="mx-4 mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{{ recordError }} <button class="underline" @click="load">重试</button></p>
       <div class="workbench-layout">
-        <PhoneControl ref="phone" class="workbench-phone" immersive :controls-visible="controlsVisible" :text-busy="textBusy" @hide-tools="controlsVisible = false" @compose="openComposer" @tools="toolsOpen = true" :device-id="id" :online="online" :command-ready="connected" :request-command="requestCommand" :rotation="rotation" @command="send" @log="log" />
+        <PhoneControl ref="phone" class="workbench-phone" immersive :video-preference="videoSettings" :controls-visible="controlsVisible" :text-busy="textBusy" @hide-tools="controlsVisible = false" @compose="openComposer" @tools="toolsOpen = true" :device-id="id" :online="online" :command-ready="connected" :request-command="requestCommand" :rotation="rotation" @command="send" @log="log" />
         <component :is="mobile ? 'dialog' : 'section'" ref="detailsElement" class="workbench-details rounded-lg border border-border bg-background" aria-label="设备信息与工具">
           <div v-if="mobile" class="flex items-center justify-between border-b p-3"><strong class="text-sm">设备信息与工具</strong><button aria-label="关闭设备信息" class="p-2" @click="(detailsElement as HTMLDialogElement)?.close()"><X class="h-4 w-4" /></button></div>
           <div v-if="!mobile" class="flex flex-wrap gap-2 border-b p-3"><Button size="sm" @click="openComposer">文字输入</Button><Button size="sm" variant="outline" @click="toolsOpen = true">应用与更多工具</Button></div>
@@ -245,7 +249,13 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
       <Button variant="outline" @click="showDetails">设备属性与文件</Button><Button variant="outline" @click="showSwitch">切换手机</Button>
       <Button variant="outline" @click="openComposer">文字输入</Button><Button variant="outline" @click="toolsOpen = false; controlsVisible = false">纯画面查看</Button>
       <a :href="`/d/${id}/?native=1`" target="_blank" rel="noopener" class="rounded border p-3 text-center text-sm">原生应用与更多工具 ↗</a><Button variant="outline" @click="router.push(`/devices/${id}`)">设备详情与权限</Button>
-    </div><p class="text-xs text-muted-foreground">点击画面一次只隐藏工具；收起后正常操作手机。右侧“工具”可随时恢复。</p><p class="text-xs text-muted-foreground">{{ phone?.mode === 'webrtc' ? 'WebRTC' : '兼容传屏' }} · {{ phone?.fps ?? 0 }} FPS · 媒体 RTT {{ phone?.mediaRtt ?? '—' }} ms</p></DialogContent></Dialog>
+    </div>
+    <fieldset class="grid grid-cols-2 gap-3 rounded border p-3"><legend class="px-1 text-sm font-medium">传屏设置</legend>
+      <label class="flex flex-col gap-1 text-sm">清晰度<select v-model="videoSettings.resolution" class="rounded border bg-background p-2" aria-label="传屏清晰度"><option value="auto">自动 · 响应优先</option><option :value="240">240 · 省流</option><option :value="360">360 · 流畅</option><option :value="480">480 · 均衡</option><option :value="720">720 · 清晰</option></select></label>
+      <label class="flex flex-col gap-1 text-sm">帧率上限<select v-model="videoSettings.fps" :disabled="videoSettings.resolution==='auto'" class="rounded border bg-background p-2 disabled:opacity-50" aria-label="传屏帧率"><option :value="5">5 帧/秒</option><option :value="10">10 帧/秒</option><option :value="15">15 帧/秒</option><option :value="20">20 帧/秒</option></select></label>
+      <p class="col-span-2 text-xs text-muted-foreground">自动档按网络调整；画面静止后补充清晰画面，操作时立即恢复实时画面。分辨率按短边等比例缩放。当前请求 {{ phone?.videoProfile.short ?? 360 }} / {{ phone?.videoProfile.fps ?? 10 }} FPS。</p>
+    </fieldset>
+    <p class="text-xs text-muted-foreground">点击画面一次只隐藏工具；收起后正常操作手机。右侧“工具”可随时恢复。</p><p class="text-xs text-muted-foreground">{{ phone?.mode === 'webrtc' ? 'WebRTC' : '兼容传屏' }} · {{ phone?.fps ?? 0 }} FPS · 媒体 RTT {{ phone?.mediaRtt ?? '—' }} ms</p></DialogContent></Dialog>
     <Dialog v-model:open="switchOpen"><DialogContent><DialogHeader><DialogTitle>切换手机</DialogTitle></DialogHeader><input v-model="switchQuery" class="rounded border p-2 text-base" placeholder="搜索设备名称或 ID" aria-label="搜索要切换的设备" /><p v-if="switchError" role="alert">{{ switchError }} <button @click="showSwitch">重试</button></p><p v-if="switchingLoading">正在读取设备…</p><div class="max-h-[50dvh] space-y-1 overflow-auto"><button v-for="item in availableDevices.filter(d => `${d.domain} ${d.comment} ${d.model}`.toLowerCase().includes(switchQuery.toLowerCase()))" :key="item.domain" class="flex min-h-12 w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left text-sm" :disabled="textBusy" @click="chooseDevice(item.domain)"><span class="truncate">{{ item.comment || item.model || item.domain }}</span><span class="shrink-0 text-xs text-muted-foreground">{{ item.state === 'online' ? '在线' : '离线' }}{{ item.domain === id ? ' · 当前' : '' }}</span></button></div></DialogContent></Dialog>
   </div>
 </template>

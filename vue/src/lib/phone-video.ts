@@ -1,4 +1,6 @@
 /** FIRERPA video transport. No device configuration is changed by this client. */
+import { captureScale, DEFAULT_VIDEO, VideoPolicy, type VideoPreference, type VideoProfile, type NetworkSample } from './video-policy.ts';
+import { pollFrames } from './phone-frame.ts';
 export type VideoMode = 'webrtc' | 'h264' | 'mjpeg';
 type Cancel = () => void;
 export type VideoOptions = {
@@ -16,6 +18,12 @@ export type VideoOptions = {
   log: (message: string) => void;
   stats?: (value: { rttMs: number | null; path: string; decoded: number; dropped: number }) => void;
   inputChannel?: (channel: RTCDataChannel) => void;
+  preference?: VideoPreference;
+  displaySize?: () => { width: number; height: number };
+  snapshot?: (short: number, signal: AbortSignal) => Promise<Blob>;
+  detail?: (active: boolean) => void;
+  profile?: (value: VideoProfile) => void;
+  interactionBusy?: () => boolean;
 };
 
 type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers' | 'video'> & {
@@ -24,6 +32,9 @@ type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers' | 'video'> & {
   failed: (reason: string) => void;
   stats?: VideoOptions['stats'];
   inputChannel?: VideoOptions['inputChannel'];
+  profile?: VideoProfile;
+  displaySize?: VideoOptions['displaySize'];
+  network?: (sample: NetworkSample) => void;
 };
 
 /** One RTC attempt; its cleanup also invalidates every outstanding async callback. */
@@ -35,6 +46,7 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   let first: ReturnType<typeof setTimeout> | undefined, disconnected: ReturnType<typeof setTimeout> | undefined;
   let ping: ReturnType<typeof setInterval> | undefined, statsTimer: ReturnType<typeof setInterval> | undefined;
   let statsBusy = false, incoming = Promise.resolve();
+  let previousStats: any;
   const remoteCandidates: (RTCIceCandidateInit | null)[] = [];
   const localCandidates: (RTCIceCandidateInit | null)[] = [];
   const close = () => {
@@ -107,9 +119,9 @@ export function startRtcVideo(o: RtcOptions): Cancel {
       const peer = pc!;
       const offer = await peer.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: true });
       if (closed) return; await peer.setLocalDescription(offer); if (closed) return;
-      // A 50 ms capture interval reduces interaction wait without requesting
-      // high-refresh playback. Resolution/quality stay at the pilot defaults.
-      send('request-offer', { type: offer.type, sdp: offer.sdp, servers: iceServers, display: 0, backend: 1, scale: 0.5, quality: 25, fps: 20 });
+      const profile=o.profile??{short:360,fps:10},size=o.displaySize?.()??{width:1080,height:2388};
+      send('request-offer', { type: offer.type, sdp: offer.sdp, servers: iceServers, display: 0, backend: 1,
+        scale:captureScale(profile.short,size.width,size.height), quality:25, fps:profile.fps });
       offered = true; localCandidates.splice(0).forEach(local);
     })().catch(() => fail('视频协商失败')); };
     ws.onmessage = e => {
@@ -144,6 +156,15 @@ export function startRtcVideo(o: RtcOptions): Cancel {
         o.stats?.({ rttMs: Number.isFinite(pair?.currentRoundTripTime) ? Math.round(pair.currentRoundTripTime * 1000) : null,
           path: local?.candidateType === 'relay' || remote?.candidateType === 'relay' ? 'relay' : pair ? 'direct' : 'unknown',
           decoded: receiver?.framesDecoded ?? 0, dropped: receiver?.framesDropped ?? 0 });
+        if(receiver && previousStats && receiver.id===previousStats.id) {
+          const delta=(key:string)=>Math.max(0,(receiver[key]??0)-(previousStats[key]??0));
+          const received=delta('packetsReceived'),lost=delta('packetsLost'),emitted=delta('jitterBufferEmittedCount'),decoded=delta('framesDecoded');
+          // No changed frames is a valid idle screen, not congestion.
+          if(received+lost>0) o.network?.({rttMs:Number.isFinite(pair?.currentRoundTripTime)?pair.currentRoundTripTime*1000:null,
+            loss:lost/Math.max(1,received+lost),bufferMs:emitted?delta('jitterBufferDelay')*1000/emitted:0,
+            decodeMs:decoded?delta('totalDecodeTime')*1000/decoded:0});
+        }
+        previousStats=receiver;
       }).catch(() => {}).finally(() => { statsBusy = false; });
     }, 2000);
     render();
@@ -156,60 +177,58 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   return close;
 }
 
-/** Low-rate JPEG fallback. Independent frames cannot build a dependent GOP queue.
- * Avoid the native H.264 fallback worker, which has hung during reconnect on the
- * pilot phone. WebRTC remains the primary H.264 media path.
- */
+/** Driver screenshots avoid the native screen fallback's pre-exec deadlock. */
 function startSocketVideo(o: VideoOptions): Cancel {
-  let disposed = false, cancel: Cancel = () => {}, retry: ReturnType<typeof setTimeout> | undefined;
-  let networkFailures = 0;
-  function connect() {
-    if (disposed) return; cancel();
-    let closed = false, ws: WebSocket | undefined;
-    let check: ReturnType<typeof setInterval> | undefined, frames = 0;
-    let decoding = false, latest: Blob | null = null, lastProgress = Date.now();
-    o.mode('mjpeg'); o.state('connecting');
-    cancel = () => {
-      if (closed) return; closed = true; latest = null; clearInterval(check);
-      if (ws) { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; ws.close(); }
-    };
-    const recover = (reason: string) => {
-      if (closed || disposed) return; cancel();
-      const wait = networkFailures++ < 15 ? 1000 : 5000;
-      o.state('reconnecting'); o.log(`${reason}，正在恢复画面`); retry = setTimeout(connect, wait);
-    };
-    const drawn = (w: number, h: number) => { frames++; lastProgress = Date.now(); if (frames >= 15) networkFailures = 0; o.frame(w, h); };
-    const context = o.canvas.getContext('2d', { alpha: false });
-    if (!context) { o.log('浏览器无法绘制画面'); return; }
-    const size = (w: number, h: number) => { if (o.canvas.width !== w || o.canvas.height !== h) { o.canvas.width = w; o.canvas.height = h; } };
-    try {
-      ws = new WebSocket(o.url('/ws/screen/25@3/live?type=mjpeg&backend=0&scale=0.5&display=0'));
-      ws.binaryType = 'blob';
-      ws.onmessage = async e => {
-        if (closed) return;
-        if (!(e.data instanceof Blob)) return; latest = e.data; if (decoding) return; decoding = true;
-        try {
-          while (latest && !closed) {
-            const b = latest; latest = null; const bitmap = await createImageBitmap(b);
-            try { if (!closed) { size(bitmap.width, bitmap.height); context.drawImage(bitmap, 0, 0); drawn(bitmap.width, bitmap.height); } } finally { bitmap.close(); }
-          }
-        } catch { recover('兼容画面解码失败'); } finally { decoding = false; }
-      };
-      ws.onclose = ws.onerror = () => recover('视频连接中断');
-      check = setInterval(() => {
-        if (!frames && Date.now() - lastProgress > 12000) recover('视频首帧等待超时');
-        // A connected, unchanged screen is not a broken video stream.
-      }, 1000);
-    } catch { recover('视频初始化失败'); }
-  }
-  connect();
-  return () => { disposed = true; clearTimeout(retry); cancel(); };
+  o.mode('mjpeg');o.state('connecting');
+  if(!o.snapshot)return ()=>{};
+  return pollFrames(signal=>o.snapshot!(360,signal),image=>{
+    o.canvas.width=image.width;o.canvas.height=image.height;
+    o.canvas.getContext('2d',{alpha:false})?.drawImage(image,0,0);
+    o.frame(image.width,image.height);
+  },()=>o.state('reconnecting'));
 }
 
-export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void } {
+export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void; interact: () => void } {
   let disposed = false, socket: Cancel | undefined, rtc: Cancel | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined, attempts = 0, connectedAt = 0, upgrading = false;
+  const policy=new VideoPolicy(),preference=o.preference??DEFAULT_VIDEO;
+  let lastInteraction=performance.now(),lastMotion=performance.now(),sampled=0,signature:Uint8ClampedArray|undefined;
+  let detail=false,stillBusy=false,stillAbort:AbortController|undefined,stillVersion=0,lastStillAttempt=0;
+  const probe=document.createElement('canvas');probe.width=24;probe.height=48;
+  const probeContext=probe.getContext?.('2d',{willReadFrequently:true});
+  const clearDetail=()=>{stillVersion++;stillAbort?.abort();if(detail){detail=false;o.detail?.(false);o.canvas.getContext('2d')?.clearRect(0,0,o.canvas.width,o.canvas.height);}};
+  const interact=()=>{lastInteraction=performance.now();clearDetail();};
+  const inspectFrame=(video:HTMLVideoElement)=>{
+    const now=performance.now();
+    if(!probeContext||now-sampled<400)return;
+    sampled=now;probeContext.drawImage(video,0,0,24,48);
+    const pixels=probeContext.getImageData(0,0,24,48).data;
+    let changed=0;for(let i=0;signature&&i<pixels.length;i+=4)if(Math.abs(pixels[i]!-signature[i]!)+Math.abs(pixels[i+1]!-signature[i+1]!)+Math.abs(pixels[i+2]!-signature[i+2]!)>45)changed++;
+    if(!signature||changed>8){lastMotion=now;clearDetail();}
+    signature=pixels;
+  };
+  const stillTimer=setInterval(()=>{
+    const now=performance.now();
+    if(disposed||!connectedAt||preference.resolution!=='auto'||!o.snapshot||!o.video||detail||stillBusy||now-Math.max(lastInteraction,lastMotion)<5000||now-lastStillAttempt<10000)return;
+    stillBusy=true;lastStillAttempt=now;const version=stillVersion;stillAbort=new AbortController();
+    const deadline=setTimeout(()=>stillAbort?.abort(),6000);
+    void o.snapshot(720,stillAbort.signal).then(createImageBitmap).then(image=>{
+      try {
+        if(disposed||version!==stillVersion||!connectedAt)return;
+        // Never cover a changed or interacted-with screen with a late still.
+        o.canvas.width=image.width;o.canvas.height=image.height;o.canvas.getContext('2d')?.drawImage(image,0,0);
+        detail=true;o.detail?.(true);o.frame(image.width,image.height);
+      } finally {image.close();}
+    }).catch(()=>{}).finally(()=>{clearTimeout(deadline);stillBusy=false;});
+  },500);
   const fallback = () => { if (!disposed && !socket) socket = startSocketVideo(o); };
+  const applyProfile = () => {
+    if(disposed)return;
+    if(o.interactionBusy?.() || performance.now()-lastInteraction<500) {
+      retry=setTimeout(applyProfile,500);return;
+    }
+    clearDetail();rtc?.();rtc=undefined;connectedAt=0;upgrading=false;void upgrade();
+  };
   const upgrade = async () => {
     if (disposed || upgrading || connectedAt || o.webrtc === false || typeof RTCPeerConnection === 'undefined') return;
     upgrading = true;
@@ -219,19 +238,27 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
       catch { if (!disposed) o.log('中转配置暂不可用，继续尝试直连'); }
     }
     if (disposed) return;
-    rtc = startRtcVideo({ url: o.url, iceServers, video: o.video, stats: o.stats, inputChannel: o.inputChannel,
+    const profile=policy.profile(preference);o.profile?.(profile);
+    rtc = startRtcVideo({ url: o.url, iceServers, video: o.video, stats: o.stats, inputChannel: o.inputChannel, profile,displaySize:o.displaySize,
+      network: sample=>{
+        if(preference.resolution!=='auto'||!policy.sample(sample,performance.now())||disposed)return;
+        // Apply only between gestures; new peer gets fresh timestamps/IDR.
+        clearTimeout(retry);retry=setTimeout(applyProfile,500);
+      },
       ready: () => { if (disposed) return; upgrading = false; connectedAt = Date.now(); socket?.(); socket = undefined; o.mode('webrtc'); o.log('已切换 WebRTC 视频'); },
       frame: video => {
         if (disposed) return;
+        inspectFrame(video);
         const { videoWidth: w, videoHeight: h } = video;
-        if (o.canvas.width !== w || o.canvas.height !== h) { o.canvas.width = w; o.canvas.height = h; }
+        if (!detail&&(o.canvas.width !== w || o.canvas.height !== h)) { o.canvas.width = w; o.canvas.height = h; }
         // Let the browser composite RTC directly. No JS readback/copy is needed
         // to make each frame visible; the transparent canvas still maps input.
         if (!o.video) o.canvas.getContext('2d', { alpha: false })!.drawImage(video, 0, 0);
-        o.frame(w, h);
+        if(!detail)o.frame(w, h);
       },
       failed: reason => {
         if (disposed) return;
+        clearDetail();
         if (connectedAt && Date.now() - connectedAt > 15000) attempts = 0;
         upgrading = false; connectedAt = 0; o.stats?.({ rttMs: null, path: 'unknown', decoded: 0, dropped: 0 });
         o.log(`WebRTC：${reason}，保留兼容传屏并稍后重试`); fallback();
@@ -243,7 +270,8 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
   // JPEG only starts after RTC fails (or when RTC is explicitly unavailable).
   if (o.webrtc === false || typeof RTCPeerConnection === 'undefined') fallback();
   else { o.mode('webrtc'); o.state('connecting'); upgrade(); }
-  return Object.assign(() => { disposed = true; clearTimeout(retry); rtc?.(); socket?.(); }, {
+  return Object.assign(() => { disposed = true; clearTimeout(retry);clearInterval(stillTimer);clearDetail(); rtc?.(); socket?.(); }, {
+    interact,
     // A fresh phone command response is evidence that the tunnel is back. Don't
     // wait out an unrelated video backoff; keep any working fallback meanwhile.
     recover: () => { if (!disposed && !connectedAt && !upgrading) { clearTimeout(retry); attempts = 0; void upgrade(); } }

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Loader2, MonitorOff, Pause, WifiOff } from "lucide-vue-next";
 import { useTranslation } from "@/lib/i18n";
 import { fitDisplay } from '@/lib/mobile-layout';
+import { phoneFrame, pollFrames } from '@/lib/phone-frame';
 
 const props = defineProps<{ deviceId: string; online: boolean; paused: boolean; pending?: boolean }>();
 const { t } = useTranslation();
@@ -47,89 +48,13 @@ function connect() {
   const context = surface.getContext("2d", { alpha: false });
   if (!context) return;
   state.value = attempts ? "reconnecting" : "connecting";
-  const url = new URL(`/d/${encodeURIComponent(props.deviceId)}/ws/screen/25@5/live`, window.location.href);
-  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  url.search = "scale=0.3&type=mjpeg&backend=0&display=0";
+  cleanup = pollFrames(signal => phoneFrame(props.deviceId, 240, signal), image => {
+    surface.width = image.width; surface.height = image.height;
+    frameSize.value = { width: image.width, height: image.height };
+    context.drawImage(image, 0, 0); frames.value++; hasFrame.value = true;
+    state.value = "live"; attempts = 0;
+  }, () => { state.value = "reconnecting"; attempts++; }, 1800);
 
-  let closed = false;
-  let socket: WebSocket | undefined;
-  let latest: Blob | null = null;
-  let decoding = false;
-  let decodeErrors = 0;
-  let lastFrame = Date.now();
-  let watchdog: ReturnType<typeof setInterval> | undefined;
-
-  cleanup = () => {
-    closed = true;
-    latest = null;
-    clearInterval(watchdog);
-    if (socket) {
-      socket.onopen = socket.onclose = socket.onerror = socket.onmessage = null;
-      socket.close();
-    }
-  };
-
-  const reconnect = () => {
-    if (closed) return;
-    stop();
-    if (!enabled.value) return;
-    state.value = "reconnecting";
-    // Do not reconnect every card in a fleet at the same instant.
-    const delay = Math.min(30000, 2000 * 2 ** Math.min(attempts++, 4));
-    retryTimer = setTimeout(connect, delay + Math.random() * 500);
-  };
-
-  const drawLatest = async () => {
-    if (decoding) return;
-    decoding = true;
-    try {
-      while (!closed && latest) {
-        const next = latest;
-        latest = null;
-        let image: ImageBitmap | undefined;
-        try {
-          image = await createImageBitmap(next);
-          if (closed) break;
-          if (surface.width !== image.width || surface.height !== image.height) {
-            surface.width = image.width;
-            surface.height = image.height;
-            frameSize.value = { width: image.width, height: image.height };
-          }
-          context.drawImage(image, 0, 0);
-          frames.value++;
-          hasFrame.value = true;
-          lastFrame = Date.now();
-          state.value = "live";
-          attempts = 0;
-          decodeErrors = 0;
-        } catch {
-          if (!closed && ++decodeErrors >= 3) reconnect();
-        } finally {
-          image?.close();
-        }
-      }
-    } finally {
-      decoding = false;
-    }
-  };
-
-  try {
-    socket = new WebSocket(url);
-    socket.binaryType = "blob";
-    socket.onmessage = (event) => {
-      if (closed || !(event.data instanceof Blob)) return;
-      // At most one decoding frame and one pending frame: never queue old video.
-      latest = event.data;
-      void drawLatest();
-    };
-    socket.onclose = reconnect;
-    socket.onerror = reconnect;
-    watchdog = setInterval(() => {
-      if (Date.now() - lastFrame > 20000) reconnect();
-    }, 5000);
-  } catch {
-    reconnect();
-  }
 }
 
 function reconcile() {
