@@ -15,7 +15,9 @@ def recovery_config(source):
     """Preserve native identity/proxies; bound detection of dead mobile TCP paths."""
     config = tomllib.loads(Path(source).read_text())
     transport = config.setdefault('transport', {})
-    transport.update(tcpMuxKeepaliveInterval=5, heartbeatInterval=3,
+    # Dedicated TCP streams prevent a blocked multiplexed data stream delaying
+    # control teardown. The paired BK frps must also set tcpMux=false.
+    transport.update(tcpMux=False, tcpMuxKeepaliveInterval=5, heartbeatInterval=3,
                      heartbeatTimeout=10, dialServerTimeout=3, dialServerKeepAlive=5)
     config['loginFailExit'] = False
     return config

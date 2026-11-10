@@ -49,6 +49,7 @@ class ForwardingAdapterTests(unittest.TestCase):
             self.assertEqual(c['proxies'][0]['localPort'],1234)
             self.assertTrue(c['transport']['tls']['enable'])
             self.assertEqual(c['transport']['heartbeatTimeout'],10)
+            self.assertFalse(c['transport']['tcpMux'])
             self.assertFalse(c['loginFailExit'])
             self.assertEqual(p.read_text(), original)
 

@@ -30,7 +30,7 @@ export function createPhoneInput(request: PhoneRequest, failed: () => void, copy
   }
   function copy(cut = false) {
     flush(); enqueue(async valid => {
-      await request('device/input/keycode', [0, cut ? 52 : 31, 0x1000]);
+      await request('device/input/keycode', [0, cut ? 277 : 278]);
       if (!valid()) return;
       const value = await request('clipboard/get', []);
       if (!valid()) return;
@@ -46,7 +46,7 @@ export function createPhoneInput(request: PhoneRequest, failed: () => void, copy
 export function androidKey(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey' | 'isComposing' | 'keyCode'>): [number, number] | null {
   if (e.isComposing || e.keyCode === 229) return null;
   if ((e.ctrlKey || e.metaKey) && !e.altKey && ['a', 'x', 'c'].includes(e.key.toLowerCase()))
-    return [e.key.toLowerCase().charCodeAt(0) - 97 + 29, 0x1000];
+    return [e.key.toLowerCase().charCodeAt(0) - 97 + 29, 0x7000];
   // Ctrl/Cmd+V is handled by the browser paste event, not sent twice.
   if (e.ctrlKey || e.metaKey || e.altKey) return null;
   const code: Record<string, number> = { Backspace: 67, Delete: 112, Enter: 66, Tab: 61, ArrowUp: 19, ArrowDown: 20, ArrowLeft: 21, ArrowRight: 22, Home: 122, End: 123, Escape: 4 };
