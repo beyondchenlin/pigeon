@@ -11,6 +11,9 @@ import { fitDisplay } from '@/lib/mobile-layout';
 const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean }>();
 const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string]; 'hide-tools': []; compose: []; tools: [] }>();
 const canvas = ref<HTMLCanvasElement>();
+const video = ref<HTMLVideoElement>();
+// Diagnostic rollback without changing the controls or the device service.
+const nativeVideo = new URLSearchParams(location.search).get('renderer') !== 'canvas';
 const panel = ref<HTMLDivElement>();
 const viewport = ref<HTMLDivElement>();
 const keyboard = ref<HTMLTextAreaElement>();
@@ -102,7 +105,7 @@ function start() {
   recoverTouch = () => { if (!touchReady.value) { clearTimeout(retry); connectTouch(); } };
   connectTouch();
   dispose = startPhoneVideo({
-    url: path => deviceSocket(props.deviceId, path), canvas: canvas.value,
+    url: path => deviceSocket(props.deviceId, path), canvas: canvas.value, video: nativeVideo ? video.value : undefined,
     decoderUrl: new URL(`/d/${encodeURIComponent(props.deviceId)}/static/js/decoder.js`, location.href).href,
     webrtc: new URLSearchParams(location.search).get('transport') !== 'ws',
     loadIceServers: async () => {
@@ -196,7 +199,8 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
       </div>
     </div>
     <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-background" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath">
-      <canvas ref="canvas" :style="canvasStyle" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
+      <video ref="video" :style="canvasStyle" class="rtc-video" :class="{ 'rtc-visible': nativeVideo && mode === 'webrtc' && state === 'live' }" autoplay muted playsinline disablepictureinpicture aria-hidden="true" />
+      <canvas ref="canvas" :style="canvasStyle" :class="{ 'rtc-input': nativeVideo && mode === 'webrtc' && state === 'live' }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
       <textarea ref="keyboard" class="phone-keyboard" aria-label="手机文字输入" autocomplete="off" autocapitalize="off" :spellcheck="false" inputmode="none" @keydown="keyboardDown" @input="inputText" @compositionstart="composing = true" @compositionend="composing = false; inputText()" @paste="paste" @blur="blurInput" />
       <div v-if="state !== 'live'" class="absolute inset-0 flex items-center justify-center bg-black/75 px-4 text-center text-sm text-white">{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</div>
     </div>
@@ -219,6 +223,9 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 .screen-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 4px; }
 .screen-action:hover { background: var(--muted); }
 .screen-viewport { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.rtc-video { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; }
+.rtc-video.rtc-visible { opacity: 1; }
+.rtc-input { opacity: 0; }
 .phone-keyboard { position: absolute; bottom: 8px; left: 50%; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; pointer-events: none; }
 .phone-navigation { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; padding: 5px 7px 0; flex-shrink: 0; }
 .phone-navigation .nav-action { height: 46px; padding: 4px 0; gap: 4px; flex-direction: column; font-size: 10px; line-height: 14px; font-weight: 400; }

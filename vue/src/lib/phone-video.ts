@@ -4,6 +4,8 @@ type Cancel = () => void;
 export type VideoOptions = {
   url: (path: string) => string;
   canvas: HTMLCanvasElement;
+  /** Mounted compositor surface. Canvas remains the input/fallback surface. */
+  video?: HTMLVideoElement;
   decoderUrl: string;
   iceServers?: RTCIceServer[];
   loadIceServers?: () => Promise<RTCIceServer[]>;
@@ -15,7 +17,7 @@ export type VideoOptions = {
   stats?: (value: { rttMs: number | null; path: string; decoded: number; dropped: number }) => void;
 };
 
-type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers'> & {
+type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers' | 'video'> & {
   frame: (video: HTMLVideoElement) => void;
   ready: () => void;
   failed: (reason: string) => void;
@@ -48,7 +50,7 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   const send = (type: string, data?: unknown) => { if (!closed && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, data })); };
   const local = (candidate: RTCIceCandidateInit | null) => candidate ? send('candidate', candidate) : send('ice-candidates-complete');
   function drawLatest() {
-    if (closed || !video) return;
+    if (closed || !video || (o.video && !video.srcObject)) return;
     const decoded = video.getVideoPlaybackQuality?.().totalVideoFrames;
     const changed = decoded === undefined ? video.currentTime !== previousTime : decoded !== previousDecoded;
     if (video.readyState >= 2 && video.videoWidth && video.videoHeight && changed) {
@@ -68,9 +70,16 @@ export function startRtcVideo(o: RtcOptions): Cancel {
   try {
     const iceServers = o.iceServers ?? [{ urls: 'stun:stun.device-farm.com' }];
     pc = new RTCPeerConnection({ iceServers });
-    video = document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true;
+    video = o.video ?? document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true;
     pc.ontrack = e => {
       if (closed || !video || e.track.kind !== 'video') return;
+      // A preference, not a promise: the browser still raises its minimum for
+      // network jitter. Unsupported/readonly implementations must keep working.
+      try {
+        if ('jitterBufferTarget' in e.receiver) {
+          (e.receiver as RTCRtpReceiver & { jitterBufferTarget: number }).jitterBufferTarget = 20;
+        }
+      } catch { /* Leave the browser's adaptive buffering in place. */ }
       video.srcObject = e.streams[0] || new MediaStream([e.track]);
       e.track.onended = () => fail('视频轨道结束');
       void video.play().catch(() => fail('浏览器未允许视频播放'));
@@ -131,9 +140,8 @@ export function startRtcVideo(o: RtcOptions): Cancel {
       }).catch(() => {}).finally(() => { statsBusy = false; });
     }, 2000);
     render();
-    // This detached video is decoded into the visible canvas. Chromium may
-    // throttle its compositor callback even while new frames are decoded.
-    // Draw only the latest decoded frame; never replay a queue of old pictures.
+    // Mounted video presents independently of JS. This watchdog updates first
+    // frame/dimensions/stats, and only paints for legacy canvas consumers.
     paintWatchdog = setInterval(() => {
       if (performance.now() - lastCallback >= 150) drawLatest();
     }, 100);
@@ -204,13 +212,16 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
       catch { if (!disposed) o.log('中转配置暂不可用，继续尝试直连'); }
     }
     if (disposed) return;
-    rtc = startRtcVideo({ url: o.url, iceServers, stats: o.stats,
+    rtc = startRtcVideo({ url: o.url, iceServers, video: o.video, stats: o.stats,
       ready: () => { if (disposed) return; upgrading = false; connectedAt = Date.now(); socket?.(); socket = undefined; o.mode('webrtc'); o.log('已切换 WebRTC 视频'); },
       frame: video => {
         if (disposed) return;
         const { videoWidth: w, videoHeight: h } = video;
         if (o.canvas.width !== w || o.canvas.height !== h) { o.canvas.width = w; o.canvas.height = h; }
-        o.canvas.getContext('2d', { alpha: false })!.drawImage(video, 0, 0); o.frame(w, h);
+        // Let the browser composite RTC directly. No JS readback/copy is needed
+        // to make each frame visible; the transparent canvas still maps input.
+        if (!o.video) o.canvas.getContext('2d', { alpha: false })!.drawImage(video, 0, 0);
+        o.frame(w, h);
       },
       failed: reason => {
         if (disposed) return;

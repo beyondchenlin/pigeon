@@ -38,7 +38,8 @@ function setup(t, combined = false, extra = {}) {
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
     restores.push(() => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name]);
   }
-  const stop = combined ? startPhoneVideo({ url: p => p, decoderUrl: 'https://example.test/decoder.js', canvas: { getContext: () => ({ drawImage() {} }) }, frame: (w,h) => frames.push([w,h]), mode: m => modes.push(m), state() {}, log() {}, ...extra }) : startRtcVideo({ url: p => p, ready: () => ready++, frame: v => frames.push(v.currentTime), failed: why => failures.push(why) });
+  if (extra.mounted) { delete extra.mounted; extra.video = doc.createElement('video'); }
+  const stop = combined ? startPhoneVideo({ url: p => p, decoderUrl: 'https://example.test/decoder.js', canvas: { getContext: () => ({ drawImage() {} }) }, frame: (w,h) => frames.push([w,h]), mode: m => modes.push(m), state() {}, log() {}, ...extra }) : startRtcVideo({ url: p => p, ready: () => ready++, frame: v => frames.push(v.currentTime), failed: why => failures.push(why), ...extra });
   t.after(() => { stop(); restores.forEach(restore => restore()); });
   return { sockets, peers, videos, failures, frames, modes, stop, get ready() { return ready; } };
 }
@@ -50,6 +51,43 @@ test('keeps fallback until a real drawable RTC frame arrives', async t => {
   s.videos[0].emit(); assert.equal(s.ready, 1); assert.equal(s.frames.length, 1);
   s.videos[0].emit(); assert.equal(s.ready, 1);
   t.mock.timers.tick(13000); assert.deepEqual(s.failures, []);
+});
+
+test('mounted RTC presents without canvas copies, retains dimensions and releases the stream', t => {
+  let copies = 0;
+  const canvas = { getContext: () => ({ drawImage() { copies++; } }) };
+  const s = setup(t, true, { mounted: true, canvas }), v = s.videos[0];
+  assert.equal(s.videos.length, 1); // Reuse the provided DOM element.
+  v.emit(); assert.equal(s.frames.length, 0); // Never promote a stale frame.
+  const receiver = { jitterBufferTarget: null }, stream = {};
+  s.peers[0].ontrack({ track: { kind: 'video' }, streams: [stream], receiver });
+  assert.equal(receiver.jitterBufferTarget, 20);
+  v.emit(); assert.deepEqual(s.frames, [[540, 1194]]);
+  assert.equal(copies, 0); assert.equal(canvas.width, 540); assert.equal(canvas.height, 1194);
+  assert.equal(v.srcObject, stream);
+  s.stop(); assert.equal(v.srcObject, null); assert.equal(v.callback, null);
+  assert.equal(s.peers[0].stopped, 1);
+});
+
+test('buffer preference cannot break receivers that reject or lack the optional setter', t => {
+  const s = setup(t);
+  const receiver = { set jitterBufferTarget(value) { throw new Error('unsupported'); } };
+  for (const r of [receiver, {}]) {
+    s.peers[0].ontrack({ track: { kind: 'video' }, streams: [{}], receiver: r });
+  }
+  s.videos[0].emit(); assert.equal(s.ready, 1); assert.deepEqual(s.failures, []);
+});
+
+test('mounted surface survives RTC failure, JPEG fallback, and a fresh RTC track', t => {
+  const s = setup(t, true, { mounted: true }), v = s.videos[0];
+  s.peers[0].ontrack({ track: { kind: 'video' }, streams: [{}], receiver: {} }); v.emit();
+  s.peers[0].connectionState = 'failed'; s.peers[0].onconnectionstatechange();
+  assert.equal(v.srcObject, null); assert.equal(s.modes.at(-1), 'mjpeg');
+  const fallback = s.sockets.find(x => x.url.includes('/live'));
+  t.mock.timers.tick(1000); v.emit(); assert.equal(fallback.closed, 0);
+  s.peers[1].ontrack({ track: { kind: 'video' }, streams: [{}], receiver: {} }); v.emit();
+  assert.equal(s.videos.length, 1); assert.equal(fallback.closed, 1);
+  assert.equal(s.modes.at(-1), 'webrtc');
 });
 
 test('remote ICE arriving before the answer is applied in order', async t => {
