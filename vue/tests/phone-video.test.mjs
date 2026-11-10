@@ -175,6 +175,56 @@ test('confirmed command recovery bypasses video backoff without duplicate attemp
   assert.equal(s.peers.length,2);assert.equal(fallback.signal.aborted,true);
 });
 
+test('stalled input response opens fresh screenshots without closing P2P, then returns on new video',async t=>{
+ const s=setup(t,true,{mounted:true}),v=s.videos[0],pc=s.peers[0];
+ let decoded=1;
+ pc.getStats=async()=>new Map([['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:decoded,packetsReceived:10}]]);
+ pc.ontrack({track:{kind:'video'},streams:[{}],receiver:{}});v.emit();
+ t.mock.timers.tick(1000);await flush();
+ s.stop.interact();t.mock.timers.tick(2000);await flush();
+ assert.equal(s.modes.at(-1),'mjpeg');assert.equal(s.snapshots[0].short,360);
+ assert.equal(pc.closed,undefined);assert.equal(s.peers.length,1);
+ decoded++;v.emit();
+ assert.equal(s.modes.at(-1),'webrtc');assert.equal(s.snapshots[0].signal.aborted,true);
+ assert.equal(s.peers.length,1);
+});
+
+test('a persistent media stall replaces only its peer after the bounded screenshot rescue',async t=>{
+ const s=setup(t,true),v=s.videos[0],pc=s.peers[0];
+ pc.getStats=async()=>new Map([['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:1,packetsReceived:10}]]);
+ v.emit();t.mock.timers.tick(1000);await flush();s.stop.interact();
+ t.mock.timers.tick(2000);await flush();assert.equal(s.modes.at(-1),'mjpeg');
+ t.mock.timers.tick(7000);await flush();assert.equal(pc.closed,undefined);
+ t.mock.timers.tick(1000);await flush();assert.equal(pc.closed,true);
+ t.mock.timers.tick(1000);await flush();assert.equal(s.peers.length,2);
+});
+
+test('static idle video keeps its peer and does not start screenshot rescue',async t=>{
+ const s=setup(t,true),pc=s.peers[0];
+ pc.getStats=async()=>new Map([['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:1,packetsReceived:10}]]);
+ s.videos[0].emit();
+ for(let i=0;i<30;i++){t.mock.timers.tick(1000);await flush();}
+ assert.equal(pc.closed,undefined);assert.equal(s.snapshots.length,0);
+});
+
+test('policy changes do not reconnect an identical effective profile after encoder quarantine',async t=>{
+ const profiles=[],s=setup(t,true,{profile:p=>profiles.push(p)});
+ let count=0,rtt=.05;
+ const stats=async()=>new Map([
+  ['video',{id:'video',type:'inbound-rtp',kind:'video',framesDecoded:++count,packetsReceived:count*10}],
+  ['transport',{id:'transport',type:'transport',selectedCandidatePairId:'pair'}],
+  ['pair',{id:'pair',type:'candidate-pair',currentRoundTripTime:rtt}]
+ ]);
+ s.peers[0].getStats=stats;s.videos[0].emit();
+ for(let i=0;i<33;i++){t.mock.timers.tick(1000);await flush();}
+ assert.deepEqual(profiles.map(p=>p.short),[360,480]);
+ s.peers[1].connectionState='connected';t.mock.timers.tick(12000);await flush();
+ t.mock.timers.tick(1000);await flush();assert.deepEqual(profiles.map(p=>p.short),[360,480,360]);
+ s.peers[2].getStats=stats;s.videos[2].emit();rtt=.4;
+ for(let i=0;i<8;i++){t.mock.timers.tick(1000);await flush();}
+ assert.equal(s.peers.length,3);assert.equal(s.peers[2].closed,undefined);
+});
+
 test('late ICE credentials cannot create a peer after the page stops', async t => {
   let resolve;
   const s = setup(t, true, { loadIceServers: () => new Promise(r => resolve = r) });
