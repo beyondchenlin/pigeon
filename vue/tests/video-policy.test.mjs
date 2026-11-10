@@ -1,12 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {VideoPolicy,videoPreference,captureScale} from '../src/lib/video-policy.ts';
+import {VideoPolicy,videoPreference,captureScale,compatibleProfile} from '../src/lib/video-policy.ts';
 test('safe auto default, manual profile and aspect-preserving short edge',()=>{
   assert.deepEqual(videoPreference(null),{resolution:'auto',fps:10});
   assert.deepEqual(videoPreference({resolution:999,fps:999}),{resolution:'auto',fps:10});
   assert.deepEqual(new VideoPolicy().profile(videoPreference({resolution:240,fps:5})),{short:240,fps:10});
   assert.equal(captureScale(360,1080,2388),1/3);assert.equal(captureScale(360,2388,1080),1/3);
   assert.equal(captureScale(720,320,480),1);
+});
+test('unsupported profiles fall down without being selected again, with a bounded floor',()=>{
+  const rejected=new Set([480]);
+  assert.deepEqual(compatibleProfile({short:480,fps:10},rejected),{short:360,fps:10});
+  assert.deepEqual(compatibleProfile({short:720,fps:15},rejected),{short:720,fps:15});
+  rejected.add(360);assert.deepEqual(compatibleProfile({short:480,fps:10},rejected),{short:240,fps:10});
+  rejected.add(240);assert.equal(compatibleProfile({short:480,fps:10},rejected),null);
 });
 test('congestion lowers quickly, recovery requires sustained good samples without oscillation',()=>{
   const p=new VideoPolicy(),bad={rttMs:400,loss:0,bufferMs:0,decodeMs:0},good={...bad,rttMs:60};

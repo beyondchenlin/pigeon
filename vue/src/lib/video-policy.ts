@@ -11,6 +11,12 @@ export function captureScale(short: number, width: number, height: number) {
   const edge = Math.min(width, height);
   return Math.max(.1, Math.min(1, short / (Number.isFinite(edge) && edge > 0 ? edge : 1080)));
 }
+/** A negotiated connection without an encoded first frame can indicate an
+ * unsupported hardware encoder profile. Quarantine it for this session only. */
+export function compatibleProfile(requested: VideoProfile, rejected: ReadonlySet<number>): VideoProfile | null {
+  const short=[720,480,360,240].find(edge=>edge<=requested.short&&!rejected.has(edge));
+  return short===undefined?null:{short,fps:requested.fps};
+}
 /** Fast degradation, slow recovery. Idle clarity uses a separate still frame,
  * so it never renegotiates the peer or delays an in-flight gesture. */
 export class VideoPolicy {

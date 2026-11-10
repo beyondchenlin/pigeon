@@ -1,5 +1,5 @@
 /** FIRERPA video transport. No device configuration is changed by this client. */
-import { captureScale, DEFAULT_VIDEO, VideoPolicy, type VideoPreference, type VideoProfile, type NetworkSample } from './video-policy.ts';
+import { captureScale, compatibleProfile, DEFAULT_VIDEO, VideoPolicy, type VideoPreference, type VideoProfile, type NetworkSample } from './video-policy.ts';
 import { pollFrames } from './phone-frame.ts';
 export type VideoMode = 'webrtc' | 'h264' | 'mjpeg';
 type Cancel = () => void;
@@ -29,7 +29,7 @@ export type VideoOptions = {
 type RtcOptions = Pick<VideoOptions, 'url' | 'iceServers' | 'video'> & {
   frame: (video: HTMLVideoElement) => void;
   ready: () => void;
-  failed: (reason: string) => void;
+  failed: (reason: string, connectedWithoutMedia?: boolean) => void;
   stats?: VideoOptions['stats'];
   inputChannel?: VideoOptions['inputChannel'];
   profile?: VideoProfile;
@@ -60,7 +60,7 @@ export function startRtcVideo(o: RtcOptions): Cancel {
     }
     remoteCandidates.length = localCandidates.length = 0;
   };
-  const fail = (reason: string) => { if (closed) return; close(); o.failed(reason); };
+  const fail = (reason: string, connectedWithoutMedia=false) => { if (closed) return; close(); o.failed(reason,connectedWithoutMedia); };
   const send = (type: string, data?: unknown) => { if (!closed && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, data })); };
   const local = (candidate: RTCIceCandidateInit | null) => candidate ? send('candidate', candidate) : send('ice-candidates-complete');
   function drawLatest() {
@@ -141,7 +141,7 @@ export function startRtcVideo(o: RtcOptions): Cancel {
     };
     // Once media is flowing, a signaling socket closure alone need not interrupt it.
     ws.onclose = ws.onerror = () => { if (!ready) fail('视频信令未连接'); };
-    first = setTimeout(() => fail('视频首帧等待超时'), 12000);
+    first = setTimeout(() => fail('视频首帧等待超时',pc?.connectionState==='connected'), 12000);
     ping = setInterval(() => send('ping'), 15000);
     statsTimer = setInterval(() => {
       if (closed || !ready || statsBusy || !pc) return;
@@ -192,6 +192,7 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
   let disposed = false, socket: Cancel | undefined, rtc: Cancel | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined, attempts = 0, connectedAt = 0, upgrading = false;
   const policy=new VideoPolicy(),preference=o.preference??DEFAULT_VIDEO;
+  const rejectedProfiles=new Set<number>();
   let lastInteraction=performance.now(),lastMotion=performance.now(),sampled=0,signature:Uint8ClampedArray|undefined;
   let detail=false,detailAt=0,stillBusy=false,stillAbort:AbortController|undefined,stillVersion=0,lastStillAttempt=0;
   const probeWidth=64,probeHeight=144;
@@ -242,7 +243,9 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
       catch { if (!disposed) o.log('中转配置暂不可用，继续尝试直连'); }
     }
     if (disposed) return;
-    const profile=policy.profile(preference);o.profile?.(profile);
+    const profile=compatibleProfile(policy.profile(preference),rejectedProfiles);
+    if(!profile){upgrading=false;fallback();return;}
+    o.profile?.(profile);
     rtc = startRtcVideo({ url: o.url, iceServers, video: o.video, stats: o.stats, inputChannel: o.inputChannel, profile,displaySize:o.displaySize,
       network: sample=>{
         if(preference.resolution!=='auto'||!policy.sample(sample,performance.now())||disposed)return;
@@ -260,9 +263,13 @@ export function startPhoneVideo(o: VideoOptions): Cancel & { recover: () => void
         if (!o.video) o.canvas.getContext('2d', { alpha: false })!.drawImage(video, 0, 0);
         if(!detail)o.frame(w, h);
       },
-      failed: reason => {
+      failed: (reason,connectedWithoutMedia) => {
         if (disposed) return;
         clearDetail();
+        if(connectedWithoutMedia){
+          rejectedProfiles.add(profile.short);
+          o.log(`连接已建立但 ${profile.short} 档没有首帧，尝试更低档；本次会话不再重复使用失败档位`);
+        }
         if (connectedAt && Date.now() - connectedAt > 15000) attempts = 0;
         upgrading = false; connectedAt = 0; o.stats?.({ rttMs: null, path: 'unknown', decoded: 0, dropped: 0 });
         o.log(`WebRTC：${reason}，保留兼容传屏并稍后重试`); fallback();

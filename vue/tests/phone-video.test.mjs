@@ -237,3 +237,17 @@ test('detail expires even if a small remote update escapes motion detection',asy
   t.mock.timers.tick(11000);s.snapshots[0].resolve(new Blob(['still']));await flush();
   assert.equal(s.details.at(-1),true);t.mock.timers.tick(2000);assert.equal(s.details.at(-1),false);
 });
+
+test('connected hardware profile without a first frame falls to a lower profile instead of retrying it',async t=>{
+  const profiles=[],s=setup(t,true,{preference:{resolution:480,fps:10},profile:p=>profiles.push(p)});
+  s.peers[0].connectionState='connected';t.mock.timers.tick(12000);t.mock.timers.tick(1000);
+  assert.deepEqual(profiles,[{short:480,fps:10},{short:360,fps:10}]);
+  s.videos[1].emit();t.mock.timers.tick(30000);
+  assert.equal(s.peers.length,2);assert.equal(s.modes.at(-1),'webrtc');
+});
+
+test('offline first-frame timeout does not mark the requested profile incompatible',t=>{
+  const profiles=[],s=setup(t,true,{preference:{resolution:480,fps:10},profile:p=>profiles.push(p)});
+  t.mock.timers.tick(12000);t.mock.timers.tick(1000);
+  assert.deepEqual(profiles,[{short:480,fps:10},{short:480,fps:10}]);
+});
