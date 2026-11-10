@@ -24,7 +24,11 @@ export class VideoPolicy {
   bad = 0; good = 0; lastChange = -Infinity;
   profile(preference: VideoPreference): VideoProfile {
     if (preference.resolution !== 'auto') return { short: preference.resolution, fps: preference.fps };
-    return [{ short:240,fps:10 },{ short:360,fps:10 },{ short:480,fps:10 }][this.level]!;
+    // Auto prioritizes interaction latency. Escalating a working 360 stream
+    // to an unproven hardware profile can leave a connected peer without video.
+    // Readable idle detail is provided by the separate 720 still; higher live
+    // resolutions remain an explicit manual choice.
+    return [{ short:240,fps:10 },{ short:360,fps:10 }][this.level]!;
   }
   sample(s: NetworkSample, now: number): boolean {
     const bad = s.loss > .03 || s.bufferMs > 180 || s.decodeMs > 60 || (s.rttMs ?? 0) > 300;
@@ -33,7 +37,7 @@ export class VideoPolicy {
     if (this.bad >= 2 && this.level > 0 && now-this.lastChange >= 10000) {
       this.level--; this.lastChange=now; this.bad=this.good=0; return true;
     }
-    if (this.good >= 15 && this.level < 2 && now-this.lastChange >= 30000) {
+    if (this.good >= 15 && this.level < 1 && now-this.lastChange >= 30000) {
       this.level++; this.lastChange=now; this.bad=this.good=0; return true;
     }
     return false;

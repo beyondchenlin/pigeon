@@ -228,14 +228,11 @@ test('policy changes do not reconnect an identical effective profile after encod
   ['transport',{id:'transport',type:'transport',selectedCandidatePairId:'pair'}],
   ['pair',{id:'pair',type:'candidate-pair',currentRoundTripTime:rtt}]
  ]);
- s.peers[0].getStats=stats;s.videos[0].emit();
- for(let i=0;i<33;i++){t.mock.timers.tick(1000);await flush();}
- assert.deepEqual(profiles.map(p=>p.short),[360,480]);
- s.peers[1].connectionState='connected';t.mock.timers.tick(12000);await flush();
- t.mock.timers.tick(1000);await flush();assert.deepEqual(profiles.map(p=>p.short),[360,480,360]);
- s.peers[2].getStats=stats;s.videos[2].emit();rtt=.4;
+ s.peers[0].connectionState='connected';t.mock.timers.tick(12000);await flush();
+ t.mock.timers.tick(1000);await flush();assert.deepEqual(profiles.map(p=>p.short),[360,240]);
+ s.peers[1].getStats=stats;s.videos[1].emit();rtt=.4;
  for(let i=0;i<8;i++){t.mock.timers.tick(1000);await flush();}
- assert.equal(s.peers.length,3);assert.equal(s.peers[2].closed,undefined);
+ assert.equal(s.peers.length,2);assert.equal(s.peers[1].closed,undefined);
 });
 
 test('late ICE credentials cannot create a peer after the page stops', async t => {

@@ -23,3 +23,10 @@ test('congestion lowers quickly, recovery requires sustained good samples withou
   assert.equal(p.sample(bad,33000),false);assert.equal(p.sample(bad,34000),false);
   assert.equal(p.level,1);assert.equal(p.sample(bad,42000),true);
 });
+test('fast auto keeps working 360 video on a good network; manual HD remains available',()=>{
+ const p=new VideoPolicy(),good={rttMs:45,loss:0,bufferMs:10,decodeMs:1};
+ for(let i=0;i<120;i++)assert.equal(p.sample(good,i*2000),false);
+ assert.deepEqual(p.profile(videoPreference(null)),{short:360,fps:10});
+ assert.deepEqual(p.profile({resolution:480,fps:15}),{short:480,fps:15});
+ assert.deepEqual(p.profile({resolution:720,fps:20}),{short:720,fps:20});
+});
