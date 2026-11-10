@@ -40,4 +40,17 @@
  .bk-mobile-table td a,.bk-mobile-table td pre{max-width:100%;overflow-wrap:anywhere;white-space:pre-wrap}
  .bk-page:not(.device-workbench) .min-w-\[600px\],.bk-page:not(.device-workbench) .min-w-\[800px\]{min-width:0}
  .bk-page:not(.device-workbench)>main>div:first-child button{min-height:36px}
+ .bk-page:not(.device-workbench)>div.flex>div:first-child:not(.devices-body){height:auto;min-height:48px;padding:8px 12px;flex-shrink:0}
+ .bk-page:not(.device-workbench)>div.flex>div:first-child>.flex{flex-wrap:wrap;gap:8px}
+ .bk-page .border-t>.flex.items-center.justify-between{flex-wrap:wrap;gap:8px}
+ .bk-page .border-t>.flex.items-center.justify-between>.flex{flex-wrap:wrap;gap:5px}
+ .bk-page:not(.device-workbench) .fixed.bottom-6{width:calc(100vw - 24px);flex-wrap:wrap;z-index:40}
+ .bk-batch-page>div.flex>header{height:auto;min-height:48px;padding:8px 12px;flex-wrap:wrap;gap:8px}
+ .bk-batch-page>div.flex>header>div{flex-wrap:wrap;gap:10px;min-width:0}.bk-batch-page header h1{white-space:nowrap}
+ .bk-batch-page>div.flex>main{display:flex;flex-direction:column;overflow-y:auto;min-height:0}
+ .bk-batch-page main>aside{width:100%;min-width:0;max-width:none;height:190px;flex:0 0 190px}
+ .bk-batch-page main>aside>div:first-child{padding:10px 12px}.bk-batch-page main>aside [class*='grid-cols-']{grid-template-columns:minmax(0,1fr);padding:8px 12px}
+ .bk-batch-page main>div.flex{flex:1 0 350px;min-height:350px;overflow:hidden}
+ .bk-batch-page main>div.flex>div:first-child{padding:12px}.bk-batch-page main>div.flex>div:last-child{padding:8px 12px;flex-wrap:wrap;gap:8px}
+ .bk-batch-page main>div.flex>div:last-child>div{flex-wrap:wrap;gap:6px}
 }

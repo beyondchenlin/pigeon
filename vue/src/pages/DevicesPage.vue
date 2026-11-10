@@ -2131,7 +2131,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
  .device-list-header{padding:4px 2px!important;gap:4px!important}
  .device-list-header :deep([data-slot=card-title]){font-size:10px}
  .device-list-header>div:last-child{gap:3px!important}
- .device-toolbar{width:100%;gap:4px!important}
+ .device-toolbar{width:100%;gap:4px!important;display:grid!important;grid-template-columns:minmax(0,1fr) 103px 76px}.device-toolbar>.device-search{grid-column:1;grid-row:1}.device-toolbar>select{grid-column:2;grid-row:1}.device-toolbar>button{grid-column:3}.device-toolbar>.device-view-switch{grid-column:1/3;grid-row:2;display:flex}.device-toolbar>.device-view-switch button{min-width:0;flex:1 1 0;gap:3px;padding:3px!important;overflow:hidden}.device-toolbar>.device-view-switch svg{width:13px;height:13px}.device-toolbar>.device-view-switch+button{grid-column:3;grid-row:2}
  .device-search{order:-2;flex:1;min-width:0}.device-search input{width:100%;height:36px}
  .device-toolbar>select{order:-1;width:103px;max-width:103px;height:36px;font-size:11px}
  .device-view-switch{order:1;flex:1;min-width:0}.device-view-switch button{flex:1;padding:5px;font-size:10px;min-height:32px}

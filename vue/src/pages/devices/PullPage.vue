@@ -973,7 +973,7 @@ const onFilePathKeydown = (e: KeyboardEvent) => {
 </script>
 
 <template>
-  <div class="flex h-screen w-full overflow-hidden bg-[#f5f5f7]">
+  <div class="bk-batch-page flex h-screen w-full overflow-hidden bg-[#f5f5f7]">
     <Sidebar />
 
     <div class="flex h-screen min-w-0 flex-1 flex-col lg:ml-[220px]">
