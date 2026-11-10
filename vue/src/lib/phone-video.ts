@@ -102,7 +102,9 @@ export function startRtcVideo(o: RtcOptions): Cancel {
       const peer = pc!;
       const offer = await peer.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: true });
       if (closed) return; await peer.setLocalDescription(offer); if (closed) return;
-      send('request-offer', { type: offer.type, sdp: offer.sdp, servers: iceServers, display: 0, backend: 1, scale: 0.5, quality: 25, fps: 10 });
+      // A 50 ms capture interval reduces interaction wait without requesting
+      // high-refresh playback. Resolution/quality stay at the pilot defaults.
+      send('request-offer', { type: offer.type, sdp: offer.sdp, servers: iceServers, display: 0, backend: 1, scale: 0.5, quality: 25, fps: 20 });
       offered = true; localCandidates.splice(0).forEach(local);
     })().catch(() => fail('视频协商失败')); };
     ws.onmessage = e => {
