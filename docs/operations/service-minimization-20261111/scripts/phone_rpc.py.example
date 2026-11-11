@@ -1,0 +1,38 @@
+"""Run a task-owned, bounded phone administration script via existing PIGEON RPC."""
+import json
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+
+payload = Path(sys.argv[1]).read_text(encoding="utf-8")
+cloud = """import os, signal, json
+signal.alarm(45)
+import server
+from lamda.client import Device
+d = Device('127.0.0.1', port=int(os.environ['API_PORT']), certificate='__PHONE_CERTIFICATE_PATH__')
+try:
+    r = d.execute_script(COMMAND, timeout=30)
+    decode = lambda value: value.decode('utf-8', errors='replace') if isinstance(value,bytes) else value
+    print(json.dumps({'exitstatus':r.exitstatus,'stdout':decode(r.stdout),'stderr':decode(r.stderr)}))
+finally:
+    d.channel.close()
+""".replace("COMMAND", repr("python3 -c " + shlex.quote(payload)))
+command = ["__SSH_EXECUTABLE__", "-T", "-i",
+           "__SSH_IDENTITY_FILE__", "-o", "BatchMode=yes",
+           "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+           "-o", "ConnectTimeout=15", "__SSH_HOST__",
+           "docker exec -i __PIGEON_CONTAINER__ python3 -"]
+result = subprocess.run(command, input=cloud, text=True, capture_output=True, timeout=60)
+if result.returncode:
+    print(json.dumps({'transport_exit':result.returncode,'error':'SSH or cloud execution failed'}))
+    raise SystemExit(result.returncode)
+try:
+    result = json.loads(result.stdout)
+except ValueError:
+    print('Cloud response was not the expected JSON; raw response withheld.')
+    raise SystemExit(2)
+print(result['stdout'])
+if result['stderr']:
+    print(result['stderr'], file=sys.stderr)
+raise SystemExit(result['exitstatus'])

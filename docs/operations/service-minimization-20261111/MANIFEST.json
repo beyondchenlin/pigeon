@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-11",
+  "scope": "This conversation only: phone optional-service minimization and hiding-feature research",
+  "target_branch": "dev",
+  "archive_only": true,
+  "phone_mutated_during_archiving": false,
+  "tests_run_during_archiving": false,
+  "files": [
+    {
+      "path": ".gitattributes",
+      "transformation": "Preserve LF line endings for reproducible archive checksums",
+      "bytes": 14,
+      "sha256": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9"
+    },
+    {
+      "path": "README.md",
+      "bytes": 4362,
+      "sha256": "810fc8427ad3ac0d04458ebc71cde06cda5c7cd22996cbf1c8c367b810931210",
+      "transformation": "New archive scope and handling documentation"
+    },
+    {
+      "path": "RESULT.md",
+      "bytes": 5629,
+      "sha256": "1966b92732efee758ef457d9313f12ca557b7bcba7b2e3ff33bb7f1477026bab",
+      "source_file": "RESULT.md",
+      "source_sha256": "1966b92732efee758ef457d9313f12ca557b7bcba7b2e3ff33bb7f1477026bab",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/apply_minimal.py",
+      "bytes": 7914,
+      "sha256": "03c6e5ffb159a2299d16e26d9a7537adad816357d01141daa4238458b5722450",
+      "source_file": "apply_minimal.py",
+      "source_sha256": "03c6e5ffb159a2299d16e26d9a7537adad816357d01141daa4238458b5722450",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/inspect_cron.py",
+      "bytes": 595,
+      "sha256": "5052e5bce7b93b1fee37c58d13cdeb942baf4e8c23ef30a8d67fc36787472711",
+      "source_file": "inspect_cron.py",
+      "source_sha256": "5052e5bce7b93b1fee37c58d13cdeb942baf4e8c23ef30a8d67fc36787472711",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/inspect_effective.py",
+      "bytes": 2442,
+      "sha256": "3cc103a9ec60e89a82c62fc6164ce7ab8fa4fddc504457faaaa277d2ef7975ff",
+      "source_file": "inspect_effective.py",
+      "source_sha256": "3cc103a9ec60e89a82c62fc6164ce7ab8fa4fddc504457faaaa277d2ef7975ff",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/inspect_frida_state.py",
+      "bytes": 2676,
+      "sha256": "ab5b34d23a8d669babd309ebdd0374c4f9c40198c8788f25b2ea94542b35431b",
+      "source_file": "inspect_frida_state.py",
+      "source_sha256": "ab5b34d23a8d669babd309ebdd0374c4f9c40198c8788f25b2ea94542b35431b",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/inspect_proxy.py",
+      "bytes": 1790,
+      "sha256": "1cea1c51e9f3b9350ad0d6f139fcc9e5751c7640c8f81be62efc542ad07aaf43",
+      "source_file": "inspect_proxy.py",
+      "source_sha256": "1cea1c51e9f3b9350ad0d6f139fcc9e5751c7640c8f81be62efc542ad07aaf43",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/inspect_runtime.py",
+      "bytes": 2065,
+      "sha256": "70da3fe44d28c29ac39c7f81509e72a165da24005b7fc126844efba87fa095ae",
+      "source_file": "inspect_runtime.py",
+      "source_sha256": "70da3fe44d28c29ac39c7f81509e72a165da24005b7fc126844efba87fa095ae",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/inspect_services.py",
+      "bytes": 2133,
+      "sha256": "90c8e933bc985abfa28562b528240c6266349541e10dd13644c58baac3599c03",
+      "source_file": "inspect_services.py",
+      "source_sha256": "90c8e933bc985abfa28562b528240c6266349541e10dd13644c58baac3599c03",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/inspect_settings.py",
+      "bytes": 2482,
+      "sha256": "fdc1621f6debc275f1f94e84bca5804d7c73c7d2e54cc481c20966245b524875",
+      "source_file": "inspect_settings.py",
+      "source_sha256": "fdc1621f6debc275f1f94e84bca5804d7c73c7d2e54cc481c20966245b524875",
+      "transformation": "LF normalization only"
+    },
+    {
+      "path": "scripts/phone_rpc.py.example",
+      "bytes": 1614,
+      "sha256": "183f9c4e69708823e8e97bf6370ae107cbd40e319cbd4845fc2865bd4eba3ef7",
+      "source_file": "phone_rpc.py",
+      "source_sha256": "3c86d9d80fd34839450d3bb6cb3991c38bdf420d0279598b2a6450257d9e355d",
+      "transformation": "LF normalization; replace deployment connection identifiers with placeholders"
+    },
+    {
+      "path": "scripts/read_receipt.py",
+      "bytes": 725,
+      "sha256": "d32167b7ed66f1ab04a22e2fa5e352751a22a565ff8637ed674fd818a0c945ad",
+      "source_file": "read_receipt.py",
+      "source_sha256": "d32167b7ed66f1ab04a22e2fa5e352751a22a565ff8637ed674fd818a0c945ad",
+      "transformation": "LF normalization only"
+    }
+  ]
+}
