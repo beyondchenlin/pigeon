@@ -176,6 +176,18 @@ class AiApiTests(AsyncHTTPTestCase):
         with self.sessions() as s:
             self.assertIsNone(active(s, 1))
 
+    def test_refusal_retains_safe_reason_and_duplicate_never_resubmits(self):
+        reply = {'http': 409, 'body': {'error': {'code': 'device_not_ready', 'message': 'private'}}}
+        with patch.object(api, 'call', return_value=reply) as call:
+            body, (_, response) = self.submit()
+            task = response['data']
+            self.assertEqual(task['status'], 'rejected')
+            self.assertEqual(task['error'], 'phone_refused_409:device_not_ready')
+            self.assertNotIn('private', json.dumps(task))
+            self.request(body)
+            self.request(suffix='/' + task['task_id'])
+            self.assertEqual(call.call_count, 1)
+
     def test_expired_task_requests_cancellation(self):
         _, (_, result) = self.submit()
         task_id = result['data']['task_id']

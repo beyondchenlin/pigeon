@@ -5,6 +5,7 @@ import LoginPage from "@/pages/LoginPage.vue";
 import OverviewPage from "@/pages/OverviewPage.vue";
 import DevicesPage from "@/pages/DevicesPage.vue";
 import DeviceWorkbench from "@/pages/DeviceWorkbench.vue";
+import EvidencePage from "@/pages/EvidencePage.vue";
 import PushPage from "@/pages/devices/PushPage.vue";
 import PullPage from "@/pages/devices/PullPage.vue";
 import BatchCommandPage from "@/pages/devices/BatchCommandPage.vue";
@@ -71,6 +72,7 @@ const rendered = computed(() => {
   if (path === "/overview") return { component: OverviewPage, key: path };
   if (path === "/devices") return { component: DevicesPage, key: path };
   if (/^\/control\/[^/]+$/.test(path)) return { component: DeviceWorkbench, key: path };
+  if (/^\/evidence\/[a-z0-9]+$/.test(path)) return { component: EvidencePage, key: path };
   if (path === "/devices/push") return { component: PushPage, key: path };
   if (path === "/devices/pull") return { component: PullPage, key: path };
   if (path === "/devices/batch-command") return { component: BatchCommandPage, key: path };

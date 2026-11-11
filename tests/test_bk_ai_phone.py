@@ -32,6 +32,17 @@ class PhoneArbitrationTests(unittest.TestCase):
         with phone.state(self.root) as data:
             self.assertEqual(data['ai'], self.task)
 
+    def test_admission_diagnostic_excludes_goal_and_credentials_and_never_calls_api(self):
+        request = dict(self.request, info='secret-location', body=dict(self.request['body'], goal='private goal'))
+        with patch.object(phone, 'api') as api:
+            phone.record_admission(request, {'http':409,'body':{'error':{'code':'device_not_ready','message':'private detail'}}})
+            api.assert_not_called()
+        receipt = json.loads((Path(self.root)/'last-admission.json').read_text())
+        self.assertEqual(receipt['task_id'], self.task)
+        self.assertEqual(receipt['error'], 'device_not_ready')
+        self.assertNotIn('private', json.dumps(receipt))
+        self.assertNotIn('secret', json.dumps(receipt))
+
     def test_second_task_blocked_until_confirmed_terminal(self):
         with patch.object(phone, 'api', return_value={'http': 201, 'body': {'task_id': self.task, 'status': 'starting'}}):
             phone.bridge(self.request)
@@ -114,6 +125,40 @@ class PhoneArbitrationTests(unittest.TestCase):
             phone.bridge(self.request)
         with phone.state(self.root) as data:
             self.assertIsNone(data['ai'])
+
+    def test_preparation_failure_never_submits_and_releases_lease(self):
+        with patch.object(phone, 'prepare_unsecured', return_value=False), patch.object(phone, 'api') as api:
+            reply = phone.bridge(dict(self.request, prepare_unsecured=True))
+            self.assertEqual(reply['http'], 409)
+            api.assert_not_called()
+        with phone.state(self.root) as data:
+            self.assertIsNone(data['ai'])
+
+    def test_preparation_is_opt_in_and_not_repeated_for_duplicate(self):
+        with patch.object(phone, 'prepare_unsecured', return_value=True) as prepare, \
+             patch.object(phone, 'api', return_value={'http':201,'body':{'task_id':self.task,'status':'starting'}}):
+            request = dict(self.request, prepare_unsecured=True)
+            phone.bridge(request)
+            phone.bridge(request)
+            prepare.assert_called_once_with('/unused')
+
+
+class PreparationTests(unittest.TestCase):
+    def test_ready_requires_no_secure_lock_and_live_helper(self):
+        for device, ready in [({'secure':False,'ready':True,'helper_available':True}, True),
+                              ({'secure':True,'ready':True,'helper_available':True}, False),
+                              ({'secure':False,'ready':False,'helper_available':True}, False),
+                              ({'secure':False,'ready':True,'helper_available':False}, False), ({}, False)]:
+            with patch.object(phone.subprocess, 'run') as run, \
+                 patch.object(phone, 'api', return_value={'http':200,'body':{'device':device}}):
+                self.assertIs(phone.prepare_unsecured('/unused'), ready)
+                self.assertTrue(all('shell' not in c.kwargs for c in run.call_args_list))
+
+    def test_command_timeout_does_not_submit(self):
+        with patch.object(phone.subprocess, 'run', side_effect=phone.subprocess.TimeoutExpired('wm',3)), \
+             patch.object(phone, 'api') as api:
+            self.assertFalse(phone.prepare_unsecured('/unused'))
+            api.assert_not_called()
 
 
 if __name__ == '__main__':

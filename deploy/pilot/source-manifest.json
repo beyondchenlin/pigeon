@@ -1,0 +1,208 @@
+{
+  "schema": 1,
+  "purpose": "Existing single-phone pilot source mapping; no credentials or business data",
+  "base_image_id": "sha256:2cf585fcc628a5d1b1212a1cc4bc62fcfbe81002a542c6ba31e1860ad4d2b36f",
+  "encoding": "Git-normalized LF for text; deployment receipt records raw and normalized hashes",
+  "files": [
+    {
+      "source": "ops/phone-pilot-adb-maintenance.service",
+      "destination": "/etc/systemd/system/phone-pilot-adb-maintenance.service",
+      "sha256_lf": "a99029df6a455c3b7dab963d7c0c8f2e40a927194202a5ab89c156a27d533173"
+    },
+    {
+      "source": "ops/phone-pilot-maintenance-mode.path",
+      "destination": "/etc/systemd/system/phone-pilot-maintenance-mode.path",
+      "sha256_lf": "6e41a460344d6b0d079ba1816ef3158ae5188d3473f3bdc18dc8665b8bc6f92e"
+    },
+    {
+      "source": "ops/phone-pilot-maintenance-mode.service",
+      "destination": "/etc/systemd/system/phone-pilot-maintenance-mode.service",
+      "sha256_lf": "b1cfe0296e80c9450aa448739cb389a9b714e1e4e1462dc5ca97c6450ca1e763"
+    },
+    {
+      "source": "ops/bk_adb_keepalive.py",
+      "destination": "/opt/phone-pilot-20261108/ops/bk_adb_keepalive.py",
+      "sha256_lf": "d6a1a204ff1e2d6e2b4ee5261b0332443a06104569ca2b02daa30aae7c59fdc1"
+    },
+    {
+      "source": "ops/bk_maintenance_host.py",
+      "destination": "/opt/phone-pilot-20261108/ops/bk_maintenance_host.py",
+      "sha256_lf": "f8e2f4253b618f165f9aa578cd0bd2a0c6c85a1bf3bd2821f5c4c874a32bf66d"
+    },
+    {
+      "source": "ops/bk_maintenance_mode.py",
+      "destination": "/opt/phone-pilot-20261108/ops/bk_maintenance_mode.py",
+      "sha256_lf": "66f913a15880fb41bce379cc8295ee2c111af11af4e8530d4c6d5c5a40a5138a"
+    },
+    {
+      "source": "deploy/pilot/auth.single-phone.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/auth.single-phone.py",
+      "sha256_lf": "b0aee08049329c2643162ea386da2cfa342646c01b0558fffe21678fdd467fa4"
+    },
+    {
+      "source": "deploy/pilot/compose.json",
+      "destination": "/opt/phone-pilot-20261108/pigeon/compose.json",
+      "sha256_lf": "2f6b5e9f5642bc91a40ec133714b93905922e63c0b70b4c9f8fb3fd1efdfe756"
+    },
+    {
+      "source": "frps.sh",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-frps.sh",
+      "sha256_lf": "c2ffef3a1a24b460a750915334bd609d698ef139dbe3b9f705c55f69c89770a5"
+    },
+    {
+      "source": "server/bk_ai.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_ai.py",
+      "sha256_lf": "bb2bb0a3d0a2dd4c8efbf34014f794a398b387fa49834418798555fff3501046"
+    },
+    {
+      "source": "server/bk_ai_store.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_ai_store.py",
+      "sha256_lf": "4b19c16ce20b0db3aa8cdf1063dd0ddc39a9f53620ccb96a8ed5fd59fa840326"
+    },
+    {
+      "source": "server/bk_ai_transport.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_ai_transport.py",
+      "sha256_lf": "78ba20f273c02bb32f7aebd6a9c0a33884e9bbd1bb6f3a444ad8af72992dd331"
+    },
+    {
+      "source": "server/bk_evidence.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_evidence.py",
+      "sha256_lf": "50cf3720be26fa676af904860a008dc22af7024d635f5613e992f3c61f25225e"
+    },
+    {
+      "source": "server/bk_evidence_store.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_evidence_store.py",
+      "sha256_lf": "075b5e22742f532b66f286e61f1e21fbb44e238105e71c8230b27b65cc314ff4"
+    },
+    {
+      "source": "server/bk_frame.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_frame.py",
+      "sha256_lf": "9417a6f7aa4965ee6a0e4bbee5842f814e2a5da8aa393aee59050dd96d3630c5"
+    },
+    {
+      "source": "server/bk_ice.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_ice.py",
+      "sha256_lf": "ee86922919a83656d0acfffd8d46c679e859d16ff309d17a3f717fe56d191f0b"
+    },
+    {
+      "source": "server/bk_maintenance.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_maintenance.py",
+      "sha256_lf": "2f291d29541cf2c39f56b246c98df8f373047a9027a63d3367da3ea645cc506f"
+    },
+    {
+      "source": "server/bk_metrics.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_metrics.py",
+      "sha256_lf": "5b622e2ada302aba4024a86ebb8554d7d4a85d3c6d4c75da40ea6c003bf9e7b5"
+    },
+    {
+      "source": "server/bk_telemetry.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_telemetry.py",
+      "sha256_lf": "ef5b333b289aa62111e427163b71f15592c29e62691cdd185d9298262dca390f"
+    },
+    {
+      "source": "ops/check_bk_ice.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/check_bk_ice.py",
+      "sha256_lf": "de237c0708f3ec75b228b6ad8c8500d77a4f62ab23b0e5aa2e74b2758dcba0e7"
+    },
+    {
+      "source": "ops/check_bk_telemetry.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/check_bk_telemetry.py",
+      "sha256_lf": "6d5e5e2bb1e1f0fcfa99a991e602029128467b2e3d2dc18c8a4050d02c47dfe7"
+    },
+    {
+      "source": "lua/bk_device_console.lua",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk_device_console.lua",
+      "sha256_lf": "f2d5b39b82248cc88f7ce5d0408ed373d97ca9a8cad4959cf7b70dbf0f0a1862"
+    },
+    {
+      "source": "ops/bk_mcp.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk_mcp.py",
+      "sha256_lf": "468bc1e56ba35545748b19a596cfd0f9449906d00b730642981310976b664692"
+    },
+    {
+      "source": "ops/check_bk_forwarding.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/check_bk_forwarding.py",
+      "sha256_lf": "ec4d62dc326e5df3b5856d6f9097f124fd5fa0e76ce47a5117f1138ce20c011c"
+    },
+    {
+      "source": "deploy/pilot/heartbeat_compat.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/heartbeat_compat.py",
+      "sha256_lf": "27b3a6fc18ec23a7b66802395c0b20562dbe992a4d2d2eacd1c6c7f77f4c8d1c"
+    },
+    {
+      "source": "ops/install_bk_console.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/install_bk_console.py",
+      "sha256_lf": "e5e5b60c79fb551b11d6ec7a3c035ef1c7297190b3c10025f96cb5505992e0d0"
+    },
+    {
+      "source": "ops/install_bk_telemetry.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/install_bk_telemetry.py",
+      "sha256_lf": "c46d5ded69c995d9899fcf72b95190dca366784be993fd762f93360e359702e0"
+    },
+    {
+      "source": "ops/run_bk_server.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/run_bk_server.py",
+      "sha256_lf": "35dfcfc9673a25d17af9edcc95b8749a0821cecd0a7c5d43eac90ae3f81ae433"
+    },
+    {
+      "source": "ops/run_bk_worker.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/run_bk_worker.py",
+      "sha256_lf": "eda603f5e95e0dfb5ae24b9862e912115ea78f4da737e434f06ddd0173f7bca7"
+    },
+    {
+      "source": "deploy/pilot/wait_auth_then_frps.py",
+      "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/wait_auth_then_frps.py",
+      "sha256_lf": "f92dbc6d3220fe385ce93998c355073398bb84fd074db5fbb873f855cb457213"
+    },
+    {
+      "source": "deploy/pilot/postgres.conf",
+      "destination": "/opt/phone-pilot-20261108/pigeon/postgres.conf",
+      "sha256_lf": "ee68337fa3f893e8fd3a288ed09edf9c17d8d8d55a75d263d8aba894161188c3"
+    },
+    {
+      "source": "deploy/pilot/rabbitmq.conf",
+      "destination": "/opt/phone-pilot-20261108/pigeon/rabbitmq.conf",
+      "sha256_lf": "baaa6d0d0b568a17c2813c8d3a0e51b03477d758fd931712301ff3d8f6b9a30e"
+    },
+    {
+      "source": "deploy/pilot/redis/server-lock.sh",
+      "destination": "/opt/phone-pilot-20261108/pigeon/redis/server-lock.sh",
+      "sha256_lf": "ccdd92593412eb9a144a5351b9e62d8da17bcdce0d9875c9c68bbc15b93b85ac"
+    },
+    {
+      "source": "deploy/pilot/redis/server-master.sh",
+      "destination": "/opt/phone-pilot-20261108/pigeon/redis/server-master.sh",
+      "sha256_lf": "dbf7c416497d6907a6049009d405096ca674715b11d84db7b64ef6ccf1da8e3f"
+    },
+    {
+      "source": "deploy/pilot/redis/server-slave.sh",
+      "destination": "/opt/phone-pilot-20261108/pigeon/redis/server-slave.sh",
+      "sha256_lf": "e884de968b9fa765328d4083f975d85da32dffbd79477421e7042fc6476b8ae7"
+    },
+    {
+      "source": "deploy/pilot/single-phone-nginx.conf",
+      "destination": "/opt/phone-pilot-20261108/pigeon/single-phone-nginx.conf",
+      "sha256_lf": "e4af4ef1d84b4c1e7c858df252de3c36c45c233289e49df4e0fbf185ceaed410"
+    },
+    {
+      "source": "deploy/pilot/single-phone-supervisord.conf",
+      "destination": "/opt/phone-pilot-20261108/pigeon/single-phone-supervisord.conf",
+      "sha256_lf": "dea5c16aab7190de5afa90d2af2b4f8aa13fe75c23b933a8be2a77d38e381e3a"
+    },
+    {
+      "source": "deploy/pilot/runtime/executor-celery.py",
+      "destination": "container:/usr/lib/python3/dist-packages/executor/celery.py",
+      "sha256_lf": "a8e0d61e3efaa045f2c0e587ddeedb5bcc6826bdcdc70a878201328b8ba11727"
+    },
+    {
+      "source": "server/__init__.py",
+      "destination": "container:/usr/lib/python3/dist-packages/server/__init__.py",
+      "sha256_lf": "f973ea1601ef0e21ad00994dc8e3f36485cc52bb37bc93ccb6fe3b241a4b7919"
+    },
+    {
+      "source": "deploy/pilot/runtime/server-main.py",
+      "destination": "container:/usr/lib/python3/dist-packages/server/__main__.py",
+      "sha256_lf": "c332f1bc04037e93b1d027af8379405f479568e03c7ec951079f66d31d0e3adc"
+    }
+  ]
+}

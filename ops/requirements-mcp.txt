@@ -1,0 +1,2 @@
+# Isolated stdio adapter dependency; do not install into the PIGEON API runtime.
+mcp==2.3.0

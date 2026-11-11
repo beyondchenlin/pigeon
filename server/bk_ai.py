@@ -8,7 +8,7 @@ from tornado.ioloop import PeriodicCallback
 from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device
 from .bk_ai_store import AiTask, TERMINAL, active, locked_device, script_busy, change, describe, install_script_guard
-from .bk_ai_transport import call, mapping, TransportError
+from .bk_ai_transport import call, mapping, TransportError, refusal_code
 
 POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='bk-ai')
 INFLIGHT = set()
@@ -30,7 +30,7 @@ def apply_reply(task_id, reply, submitting=False):
                 return
         # Only a definite refusal before task execution frees the device.
         if submitting and reply['http'] in (400, 401, 403, 409, 422, 429):
-            change(row, 'rejected', 'phone_refused_' + str(reply['http']))
+            change(row, 'rejected', refusal_code(reply))
         else:
             change(row, 'unknown', 'phone_http_' + str(reply['http']))
 
@@ -188,6 +188,10 @@ def start_with_polling(http, original_start, **settings):
                 callback = PeriodicCallback(poll, 2000)
                 callback.start()
                 http._bk_ai_poll = callback
+                from . import bk_evidence
+                evidence_callback = PeriodicCallback(bk_evidence.poll, 5000)
+                evidence_callback.start()
+                http._bk_evidence_poll = evidence_callback
             loop.add_callback(begin)
         return original_run(loop)
     BaseAsyncIOLoop.start = run
@@ -207,6 +211,8 @@ def install():
         original(self, *args, **kwargs)
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover))?)?',
                               'server.bk_ai', handler='AiHandler')
+        self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/evidence(?:/([a-f0-9-]{36})/image)?',
+                              'server.bk_evidence', handler='EvidenceHandler')
     Service.__init__ = initialize
     original_start = __import__('server.service', fromlist=['HttpServiceManager']).HttpServiceManager.start_server
     def start(http, **settings):

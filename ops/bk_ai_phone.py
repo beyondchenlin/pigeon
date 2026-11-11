@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import time
 import urllib.request
 import urllib.error
@@ -71,7 +72,9 @@ def state(root):
 
 
 def api(info, method, path, body=None):
-    if not (method in ('GET', 'POST') and re.fullmatch(r'/api/v1(?:/device|/tasks(?:/[a-f0-9-]{36}(?:/cancel)?)?)?', path)):
+    task_path = method in ('GET', 'POST') and re.fullmatch(r'/api/v1(?:/device|/tasks(?:/[a-f0-9-]{36}(?:/cancel)?)?)?', path)
+    evidence_path = (method == 'GET' and re.fullmatch(r'/api/v1/evidence(?:/[a-f0-9-]{36}/chunk/[0-9]{1,7})?', path)) or (method == 'POST' and re.fullmatch(r'/api/v1/evidence/[a-f0-9-]{36}/ack', path))
+    if not (task_path or evidence_path):
         return {'http': 400, 'body': {'error': {'code': 'unsupported_operation'}}}
     try:
         with open(info) as f:
@@ -102,6 +105,25 @@ def api(info, method, path, body=None):
         return {'http': 502, 'body': {'error': {'code': 'delivery_unknown'}}}
 
 
+def prepare_unsecured(info):
+    """Opt-in kiosk preparation using Android's normal keyguard dismissal.
+
+    No PIN/password input and no settings changes. Runs under the AI lease before
+    submission. Bringing BK forward also lets an OEM-frozen process answer HTTP.
+    A ready system state is required; a secure/remaining lock fails closed.
+    """
+    try:
+        for args in (['input', 'keyevent', 'KEYCODE_WAKEUP'], ['wm', 'dismiss-keyguard'],
+                     ['am', 'start', '-n', 'com.beyondchenlin.bk101/com.wangzan101.mika.ui.MainActivity']):
+            subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3, check=True)
+        reply = api(info, 'GET', '/api/v1/device')
+        device = reply.get('body', {}).get('device', {})
+        return (reply['http'] == 200 and device.get('secure') is False
+                and device.get('ready') is True and device.get('helper_available') is True)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+        return False
+
+
 def bridge(request):
     root, info = request['state_dir'], request['info']
     method, path, body = request['method'], request['path'], request.get('body')
@@ -122,6 +144,11 @@ def bridge(request):
             if data.get('manual'):
                 data['ai'] = None
                 return {'http': 409, 'body': {'error': {'code': 'manual_takeover'}}}
+            if request.get('prepare_unsecured') is True and not prepare_unsecured(info):
+                # No POST has happened, so this is a definite refusal, not an
+                # ambiguous execution. A later deliberate request may try again.
+                data['ai'] = None
+                return {'http': 409, 'body': {'error': {'code': 'device_not_ready'}}}
             reply = api(info, method, path, body)
             receipt = reply.get('body', {})
             terminal = (reply['http'] in (200, 201) and isinstance(receipt, dict)
@@ -176,10 +203,38 @@ def leave_manual(root, claim):
         data['manual'] = [c for c in data['manual'] if (c.get('id') if isinstance(c, dict) else c) != claim]
 
 
+def record_admission(request, reply):
+    """Bounded diagnostic receipt, never credentials, goal text, or a retry trigger."""
+    if request.get('method') != 'POST' or request.get('path') != '/api/v1/tasks':
+        return
+    try:
+        task_id = request.get('body', {}).get('request_id')
+        if not isinstance(task_id, str) or str(uuid.UUID(task_id)) != task_id:
+            return
+        body = reply.get('body', {})
+        error = body.get('error', {}).get('code') if isinstance(body, dict) else None
+        if error not in ('control_busy_or_guard_unavailable', 'manual_takeover', 'device_not_ready',
+                         'phone_access_disabled', 'delivery_unknown', 'conflict', 'unavailable'):
+            error = 'other' if error else None
+        value = dict(task_id=task_id, http=reply.get('http'), error=error, at=time.time())
+        root = Path(request['state_dir'])
+        with state(root):
+            temporary = root / 'last-admission.tmp'
+            with temporary.open('w') as stream:
+                json.dump(value, stream); stream.flush(); os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, root / 'last-admission.json')
+    except Exception:
+        # Diagnostics cannot change the action receipt or cause a new submission.
+        pass
+
+
 if __name__ == '__main__':
     import sys
     try:
         payload = json.loads(base64.b64decode(sys.argv[1], validate=True))
-        print(json.dumps(bridge(payload), ensure_ascii=False))
+        reply = bridge(payload)
+        record_admission(payload, reply)
+        print(json.dumps(reply, ensure_ascii=False))
     except Exception:
         print(json.dumps({'http': 502, 'body': {'error': {'code': 'bridge_failure_unknown'}}}))
