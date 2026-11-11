@@ -31,6 +31,13 @@ class ExtensionStartupTests(unittest.TestCase):
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
         self.module.NATIVE_HASH = hashlib.sha256(b'fixture').hexdigest()
+        mode = patch('bk_maintenance_mode.enabled', return_value=True)
+        mode.start(); self.addCleanup(mode.stop)
+
+    def test_daily_mode_does_not_start_background_monitor(self):
+        with patch('bk_maintenance_mode.enabled', return_value=False), patch.object(self.module, 'start_monitor') as start:
+            self.module.BkLifecycleExtension.setup({})
+            start.assert_not_called()
 
     def test_verified_runtime_starts_monitor(self):
         with patch.object(self.module, 'start_monitor') as start:

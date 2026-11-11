@@ -162,13 +162,13 @@ def release(proc, parent, child, grace=2):
         os.close(fd)
 
 
-def start_monitor(runtime, user):
+def start_monitor(runtime, user, parent_pid=None):
     """Called by the extension; C-only spawn avoids the defective fork path."""
     from bk_android_spawn import spawn_pipes
     from bk_service_lifecycle import launch_environment
     env = launch_environment(os.environ, runtime, user)
     pid, out, err = spawn_pipes([runtime + '/bin/python3', user + '/modules/bk_lifecycle_monitor.py',
-                                 '--watch', runtime, user, str(os.getpid())], environment=env)
+                                 '--watch', runtime, user, str(os.getpid() if parent_pid is None else parent_pid)], environment=env)
     os.close(out)
     os.close(err)
     return pid
@@ -214,7 +214,10 @@ def publish_adb_port(transaction):
 
 def watch(runtime, user, parent_pid):
     import fcntl
+    from bk_maintenance_mode import enabled
     runtime, user = Path(runtime).resolve(), Path(user).resolve()
+    if not enabled(user):
+        return
     assert os.getuid() == 2000
     assert hashlib.sha256((runtime / 'lib/python3.12/site-packages/lamda/web/bundle.cpython-312.so').read_bytes()).hexdigest() == NATIVE_HASH
     root = user / 'phone-pilot/lifecycle'
@@ -257,6 +260,8 @@ def watch(runtime, user, parent_pid):
     report('started', monitor=os.getpid(), parent=parent.pid, parent_ticks=parent.ticks)
     try:
         while True:
+            if not enabled(user):
+                break
             if not proc.same(parent):
                 # Follow a replacement only if the official pidfile identifies
                 # the same verified runtime. Never start or revive a service.

@@ -1,6 +1,7 @@
 [Unit]
 Description=Existing phone private ADB transport maintenance
 After=docker.service
+ConditionPathExists=/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/maintenance/umdax0nurk9o/host.enabled
 
 [Service]
 Type=simple
@@ -23,6 +24,3 @@ StandardOutput=null
 StandardError=journal
 LogRateLimitIntervalSec=60
 LogRateLimitBurst=5
-
-[Install]
-WantedBy=multi-user.target

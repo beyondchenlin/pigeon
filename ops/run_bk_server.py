@@ -10,4 +10,6 @@ from server.bk_telemetry import install
 install()
 from server.bk_ai import install as install_ai
 install_ai()
+from server.bk_maintenance import install as install_maintenance
+install_maintenance()
 runpy.run_module('server', run_name='__main__')

@@ -15,6 +15,8 @@ main() {
   export HOME=/data/data/com.termux/files/home PREFIX=/data/data/com.termux/files/usr
   export PATH="$PREFIX/bin:/system/bin"
   local pilot_dir="$HOME/phone-pilot" ssh_pid='' port fresh last_state=''
+  # An explicit local opt-in is required even when Termux's shell starts us.
+  [[ -f "$pilot_dir/maintenance.enabled" ]] || return 0
   umask 077
   mkdir -p "$pilot_dir"
   chmod 700 "$pilot_dir"
@@ -44,7 +46,7 @@ main() {
   port=$(cat "$pilot_dir/adb-port" 2>/dev/null || true)
   [[ "$port" =~ ^[0-9]{4,5}$ ]] || port=1024
   printf '维护助手已启动；无线调试端口由手机自动发现。正常 5G 远控无需重复配对。\n'
-  while true; do
+  while [[ -f "$pilot_dir/maintenance.enabled" ]]; do
     fresh=$(discovered_port "$pilot_dir/adb-discovered-port" "$(date +%s)" || true)
     if [[ -n "$fresh" ]]; then port="$fresh"; fi
     printf '%s\n' "$port" > "$pilot_dir/adb-port"
@@ -60,6 +62,7 @@ main() {
     ssh_pid=$!
     while kill -0 "$ssh_pid" 2>/dev/null; do
       sleep 5
+      [[ -f "$pilot_dir/maintenance.enabled" ]] || return 0
       # ssh keeps its log descriptor open. Stop this owned child before the
       # outer loop rotates, otherwise it can keep growing the renamed file.
       if [[ -f "$pilot_dir/tunnel.log" ]] && (( $(wc -c < "$pilot_dir/tunnel.log") >= 20971520 )); then

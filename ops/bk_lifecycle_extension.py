@@ -15,9 +15,12 @@ class BkLifecycleExtension(BaseHttpExtension):
     @staticmethod
     def setup(config):
         import lamda
+        from bk_maintenance_mode import enabled
         # The optional recovery layer must never turn an unsupported version
         # or a failed observer launch into another primary-service startup error.
         try:
+            if not enabled(os.environ['USRDIR']):
+                return
             native = Path(os.environ['PKGDIR']) / 'web/bundle.cpython-312.so'
             if str(lamda.__version__) != '10.9' or hashlib.sha256(native.read_bytes()).hexdigest() != NATIVE_HASH:
                 logging.getLogger(__name__).warning('Lifecycle recovery disabled: unverified runtime')

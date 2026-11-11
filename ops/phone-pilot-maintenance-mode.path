@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply explicit phone maintenance mode changes
+
+[Path]
+PathChanged=/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/maintenance/umdax0nurk9o/host-request.json
+Unit=phone-pilot-maintenance-mode.service
+
+[Install]
+WantedBy=multi-user.target

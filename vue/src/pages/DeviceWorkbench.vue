@@ -5,6 +5,7 @@ import { Sidebar } from '@/components/dashboard/sidebar';
 import { Button } from '@/components/ui/button';
 import PhoneControl from '@/components/devices/PhoneControl.vue';
 import PhoneComposer from '@/components/devices/PhoneComposer.vue';
+import MaintenanceSwitch from '@/components/devices/MaintenanceSwitch.vue';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useMobileViewport } from '@/lib/mobile-layout';
 import { apiRequest } from '@/lib/api';
@@ -250,6 +251,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
       <Button variant="outline" @click="openComposer">文字输入</Button><Button variant="outline" @click="toolsOpen = false; controlsVisible = false">纯画面查看</Button>
       <a :href="`/d/${id}/?native=1`" target="_blank" rel="noopener" class="rounded border p-3 text-center text-sm">原生应用与更多工具 ↗</a><Button variant="outline" @click="router.push(`/devices/${id}`)">设备详情与权限</Button>
     </div>
+    <MaintenanceSwitch v-if="toolsOpen" :key="id" :device-id="id" />
     <fieldset class="grid grid-cols-2 gap-3 rounded border p-3"><legend class="px-1 text-sm font-medium">传屏设置</legend>
       <label class="flex flex-col gap-1 text-sm">清晰度<select v-model="videoSettings.resolution" class="rounded border bg-background p-2" aria-label="传屏清晰度"><option value="auto">自动 · 响应优先</option><option :value="240">240 · 省流</option><option :value="360">360 · 流畅</option><option :value="480">480 · 均衡</option><option :value="720">720 · 清晰</option></select></label>
       <label class="flex flex-col gap-1 text-sm">帧率上限<select v-model="videoSettings.fps" :disabled="videoSettings.resolution==='auto'" class="rounded border bg-background p-2 disabled:opacity-50" aria-label="传屏帧率"><option :value="10">10 帧/秒</option><option :value="15">15 帧/秒</option><option :value="20">20 帧/秒</option></select></label>

@@ -1,2 +1,4 @@
 bk_termux_tunnel.sh text eol=lf
 phone-pilot-adb-maintenance.service text eol=lf
+phone-pilot-maintenance-mode.service text eol=lf
+phone-pilot-maintenance-mode.path text eol=lf

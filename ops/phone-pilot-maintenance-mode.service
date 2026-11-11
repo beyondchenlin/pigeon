@@ -1,0 +1,23 @@
+[Unit]
+Description=Apply phone maintenance mode once
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/phone-pilot-20261108/ops/bk_maintenance_host.py
+User=root
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/maintenance/umdax0nurk9o
+TimeoutStartSec=45
+StandardOutput=null
+StandardError=journal
+LogRateLimitIntervalSec=60
+LogRateLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
