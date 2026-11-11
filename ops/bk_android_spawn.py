@@ -30,7 +30,7 @@ def media_argv(command, runtime_root):
     return argv
 
 
-def spawn_pipes(argv):
+def spawn_pipes(argv, environment=None):
     if not argv or not os.path.isabs(argv[0]) or any('\0' in v for v in argv):
         raise ValueError('Expected an absolute executable and literal argv')
     libc = C.CDLL('libc.so', use_errno=True)
@@ -73,7 +73,8 @@ def spawn_pipes(argv):
             if fd > 2:
                 check(libc.posix_spawn_file_actions_addclose(C.byref(actions), fd))
         args = (C.c_char_p * (len(argv) + 1))(*(os.fsencode(x) for x in argv), None)
-        env = [os.fsencode(k + '=' + v) for k, v in os.environ.items()]
+        source = os.environ if environment is None else environment
+        env = [os.fsencode(k + '=' + v) for k, v in source.items()]
         envp = (C.c_char_p * (len(env) + 1))(*env, None)
         pid = C.c_int()
         check(libc.posix_spawn(C.byref(pid), os.fsencode(argv[0]), C.byref(actions), C.byref(attr), args, envp))

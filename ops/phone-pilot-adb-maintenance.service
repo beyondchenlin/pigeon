@@ -1,0 +1,28 @@
+[Unit]
+Description=Existing phone private ADB transport maintenance
+After=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/phone-pilot-20261108/ops/bk_adb_keepalive.py --socket /opt/phone-pilot-20261108/stf/data/adb-socket/adb.sock --log /opt/phone-pilot-20261108/records/firerpa-startup-20261111/adb-maintenance.log
+Restart=on-failure
+RestartSec=5
+User=root
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/opt/phone-pilot-20261108/records/firerpa-startup-20261111
+MemoryMax=32M
+CPUQuota=10%
+StandardOutput=null
+StandardError=journal
+LogRateLimitIntervalSec=60
+LogRateLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
