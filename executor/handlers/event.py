@@ -725,6 +725,11 @@ def report_task_result(dt, se):
 
 
 def cb_task_status_prepared_imp(session, dt):
+    # Serialize BK AI admission with the existing script scheduler transaction.
+    from server.bk_ai_store import active, locked_device
+    guarded = locked_device(session, dt.device_id)
+    if guarded.controlling or active(session, guarded.id):
+        return None
     if dt.job.state != JobState.RUNNING.value:
         return None
     if not is_device_in_job_group(session, dt.device, dt.job):

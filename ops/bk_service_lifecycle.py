@@ -1,5 +1,7 @@
 """Build a clean environment for the official, non-root FIRERPA launcher."""
 
+import subprocess
+
 
 def launch_environment(parent, runtime_root, user_root):
     # A running service contains __DNTNEEDRESPAWN__ and interpreter/bootstrap
@@ -16,3 +18,19 @@ def launch_environment(parent, runtime_root, user_root):
                HOME=user_root, USRDIR=user_root, ROOTDIR=runtime_root,
                LD_LIBRARY_PATH=runtime_root+'/lib', TMPDIR='/data/local/tmp')
     return env
+
+
+def launch_official(parent, runtime_root, user_root, output):
+    """Start as a child, not a session leader: FIRERPA detaches itself.
+
+    Detach the maintenance helper if necessary, never this launcher process.
+    The caller must confirm the old service exited and keep bounded diagnostics.
+    This function neither stops processes nor retries an uncertain launch.
+    """
+    return subprocess.Popen(
+        ['/system/bin/sh', runtime_root + '/bin/launch.sh',
+         '--logfile=' + runtime_root.rsplit('/', 1)[0] + '/server.log'],
+        env=launch_environment(parent, runtime_root, user_root),
+        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+        close_fds=True, start_new_session=False,
+    )

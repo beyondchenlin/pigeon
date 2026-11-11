@@ -1,0 +1,202 @@
+"""Run in the existing PIGEON runtime; SQLite receipts and a fake phone only."""
+from contextlib import contextmanager
+import json
+from types import SimpleNamespace
+import unittest
+import uuid
+from unittest.mock import patch
+import importlib.util
+import os
+if importlib.util.find_spec('sqlalchemy') is None or 'POSTGRES_PASSWORD' not in os.environ:
+    raise unittest.SkipTest('Run API integration tests in the existing PIGEON runtime')
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from tornado.testing import AsyncHTTPTestCase
+from tornado.web import Application
+from tornado.platform.asyncio import BaseAsyncIOLoop
+from executor.models import Device, Task
+from server import bk_ai as api
+from server.bk_ai_store import AiTask, active, script_busy
+
+
+class PollStartupTests(unittest.TestCase):
+    def test_poll_runs_on_the_loop_created_inside_server_start(self):
+        import asyncio
+        import uvloop
+        from tornado.ioloop import IOLoop
+        http = SimpleNamespace()
+        seen = []
+        previous = BaseAsyncIOLoop.start
+        async def observe():
+            seen.append(asyncio.get_running_loop())
+            http.ioloop.stop()
+        def original_start(manager):
+            asyncio.set_event_loop(uvloop.new_event_loop())
+            manager.ioloop = IOLoop.current()
+            manager.ioloop.call_later(3, manager.ioloop.stop)
+            manager.ioloop.start()
+        try:
+            with patch.object(api, 'poll', observe):
+                api.start_with_polling(http, original_start)
+            self.assertEqual(seen, [http.ioloop.asyncio_loop])
+            self.assertIs(BaseAsyncIOLoop.start, previous)
+        finally:
+            if hasattr(http, '_bk_ai_poll'):
+                http._bk_ai_poll.stop()
+            if hasattr(http, 'ioloop'):
+                http.ioloop.close(all_fds=True)
+            asyncio.set_event_loop(None)
+
+
+class AiApiTests(AsyncHTTPTestCase):
+    def setUp(self):
+        self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
+        for table in (Device.__table__, Task.__table__, AiTask.__table__):
+            table.create(self.engine)
+        factory = sessionmaker(self.engine, expire_on_commit=False)
+        @contextmanager
+        def session_scope():
+            with factory() as session, session.begin():
+                yield session
+        self.sessions = session_scope
+        with self.sessions() as s:
+            s.add_all([Device(id=1, domain='phonea', state='online'), Device(id=2, domain='phoneb', state='online')])
+        self.calls = []
+        self.remote = {}
+        def call(domain, method, path, body=None):
+            self.calls.append((domain, method, path, body))
+            if method == 'POST' and path == '/api/v1/tasks':
+                self.remote[body['request_id']] = dict(task_id=body['request_id'], status='running', step=1)
+                return dict(http=201, body=self.remote[body['request_id']])
+            task_id = path.split('/')[4]
+            if path.endswith('/cancel'):
+                self.remote[task_id] = dict(task_id=task_id, status='cancelled')
+                return dict(http=202, body={'accepted': True})
+            return dict(http=200, body=self.remote[task_id])
+        self.patches = [patch.object(api, 'session_scope', self.sessions), patch.object(api, 'mapping', return_value={}),
+                        patch.object(api, 'call', side_effect=call)]
+        for p in self.patches:
+            p.start()
+        super().setUp()
+
+    def tearDown(self):
+        super().tearDown()
+        for p in reversed(self.patches):
+            p.stop()
+        self.engine.dispose()
+        api.INFLIGHT.clear()
+
+    def get_app(self):
+        sessions = self.sessions
+        class Handler(api.AiHandler):
+            def get_login_user_device(self, domain):
+                if self.request.headers.get('X-Test-Auth') != 'owner':
+                    self.throw(401, 'AUTH', 'unauthorized')
+                with sessions() as s:
+                    device = s.query(Device).filter_by(domain=domain).one()
+                    return SimpleNamespace(id=1), device
+        return Application([(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover))?)?', Handler)], ctl=None)
+
+    def request(self, body=None, suffix='', domain='phonea', headers=None):
+        reply = self.fetch('/api/v1/device/' + domain + '/ai/tasks' + suffix,
+            method='POST' if body is not None else 'GET', body=None if body is None else json.dumps(body),
+            headers={'X-Test-Auth': 'owner', **(headers or {})})
+        return reply.code, json.loads(reply.body)
+
+    def submit(self, **extra):
+        body = dict(goal='Read system information only', request_id=str(uuid.uuid4()), timeout_s=60, **extra)
+        return body, self.request(body)
+
+    def test_create_duplicate_conflict_and_result(self):
+        body, (code, reply) = self.submit()
+        self.assertEqual(code, 202)
+        task_id = reply['data']['task_id']
+        self.assertEqual(reply['data']['status'], 'running')
+        self.assertEqual(self.request(body)[1]['data']['task_id'], task_id)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.request(dict(body, goal='different'))[0], 409)
+        self.remote[task_id] = dict(task_id=task_id, status='done', answer='Android 14')
+        result = self.request(suffix='/' + task_id)[1]['data']
+        self.assertEqual(result['result']['answer'], 'Android 14')
+        self.assertEqual(result['status'], 'done')
+
+    def test_unknown_submit_and_poll_timeout_never_replay(self):
+        body = dict(goal='Read only', request_id=str(uuid.uuid4()))
+        with patch.object(api, 'call', side_effect=api.TransportError('connection_unknown')) as call:
+            code, result = self.request(body)
+            task_id = result['data']['task_id']
+            self.assertEqual(result['data']['status'], 'unknown')
+            self.request(body)
+            self.request(suffix='/' + task_id)
+            self.assertEqual([c.args[1] for c in call.call_args_list], ['POST', 'GET'])
+            self.assertEqual(self.submit()[1][0], 409)
+        with patch.object(api, 'call', return_value={'http': 404, 'body': {}}):
+            self.assertEqual(self.request(suffix='/' + task_id)[1]['data']['status'], 'unknown')
+
+    def test_cancel_observes_terminal(self):
+        _, (_, result) = self.submit()
+        task_id = result['data']['task_id']
+        code, result = self.request({}, '/' + task_id + '/cancel')
+        self.assertEqual(code, 200)
+        self.assertEqual(result['data']['status'], 'cancelled')
+        self.assertTrue(result['data']['cancel_requested'])
+
+    def test_cancel_accepted_is_not_terminal(self):
+        _, (_, result) = self.submit()
+        task_id = result['data']['task_id']
+        with patch.object(api, 'call', side_effect=lambda d, m, p, b=None: {'http':202,'body':{'accepted':True}} if m=='POST' else {'http':200,'body':self.remote[task_id]}):
+            code, result = self.request({}, '/' + task_id + '/cancel')
+        self.assertEqual(code, 202)
+        self.assertEqual(result['data']['status'], 'running')
+
+    def test_ownership_offline_and_device_mapping(self):
+        self.assertEqual(self.request(headers={'X-Test-Auth':'wrong'})[0], 401)
+        body, (_, result) = self.submit()
+        self.assertEqual(self.request(suffix='/' + result['data']['task_id'], domain='phoneb')[0], 404)
+        self.assertEqual(self.request(body, domain='phoneb')[0], 202)
+        self.assertNotEqual(self.calls[0][3]['request_id'], self.calls[1][3]['request_id'])
+        with self.sessions() as s:
+            s.get(Device, 2).state = 'offline'
+        self.assertEqual(self.request(dict(body, request_id=str(uuid.uuid4())), domain='phoneb')[0], 503)
+
+    def test_scripts_and_manual_control_block_admission(self):
+        with self.sessions() as s:
+            s.add(Task(device_id=1, task_id='script', state='running'))
+        self.assertEqual(self.submit()[1][0], 409)
+        with self.sessions() as s:
+            s.query(Task).delete()
+            s.get(Device, 1).controlling = True
+        self.assertEqual(self.submit()[1][0], 409)
+        self.assertEqual(self.calls, [])
+
+    def test_phone_auth_error_is_definite_refusal(self):
+        with patch.object(api, 'call', return_value={'http':401, 'body':{}}):
+            self.assertEqual(self.submit()[1][1]['data']['status'], 'rejected')
+        with self.sessions() as s:
+            self.assertIsNone(active(s, 1))
+
+    def test_expired_task_requests_cancellation(self):
+        _, (_, result) = self.submit()
+        task_id = result['data']['task_id']
+        with self.sessions() as s:
+            s.get(AiTask, task_id).deadline = 1
+        self.assertEqual(self.request(suffix='/' + task_id)[1]['data']['status'], 'cancelled')
+
+    def test_restart_with_durable_unsubmitted_receipt_only_queries(self):
+        _, (_, result) = self.submit()
+        task_id = result['data']['task_id']
+        with self.sessions() as s:
+            row = s.get(AiTask, task_id)
+            row.status, row.snapshot = 'submitting', {}
+        with patch.object(api, 'call', return_value={'http':404,'body':{}}) as call:
+            self.assertEqual(self.request(suffix='/' + task_id)[1]['data']['status'], 'unknown')
+            self.assertEqual([c.args[1] for c in call.call_args_list], ['GET'])
+
+    def test_malformed_phone_reply_remains_unresolved(self):
+        with patch.object(api, 'call', return_value={'http':200,'body':[]}):
+            self.assertEqual(self.submit()[1][1]['data']['status'], 'unknown')
+
+
+if __name__ == '__main__':
+    unittest.main()
