@@ -2,6 +2,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import os
 import time
 import uuid
@@ -10,6 +11,7 @@ from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device
 from .bk_ai_store import AiTask, TERMINAL, active, locked_device, script_busy, change, describe, install_script_guard
 from .bk_ai_transport import call, mapping, TransportError, refusal_code
+from .bk_maintenance import PUBLIC_ORIGIN
 
 POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='bk-ai')
 INFLIGHT = set()
@@ -88,8 +90,10 @@ class AiHandler(BaseHttpService):
         if self.request.method == 'POST':
             origin = self.request.headers.get('Origin')
             if origin:
-                allowed = {self.request.protocol + '://' + self.request.host, os.environ.get('BK_AI_ORIGIN', '')}
+                allowed = {self.request.protocol + '://' + self.request.host, os.environ.get('BK_AI_ORIGIN') or PUBLIC_ORIGIN}
                 if origin not in allowed or self.request.headers.get('X-Requested-With') != 'BK-Task':
+                    logging.getLogger(__name__).warning('BK task origin refused: origin=%r allowed=%r explicit=%s',
+                        origin[:200], sorted(allowed), self.request.headers.get('X-Requested-With') == 'BK-Task')
                     self.throw(403, 'AI_ORIGIN', 'Use the same-origin task page or an authenticated API client')
             elif self.get_cookie('token') and self.request.headers.get('X-Requested-With') != 'BK-Task':
                 self.throw(403, 'AI_REQUEST', 'Explicit task request required')

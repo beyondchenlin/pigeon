@@ -16,6 +16,7 @@ const busy = ref(false);
 const loading = ref(false);
 const loaded = ref(false);
 const error = ref('');
+const submitError = ref('');
 const key = computed(() => `bk-task-pending:${domain.value}`);
 const active = computed(() => receipts.value.some(r => !terminalTask(r.status)));
 const disabled = computed(() => busy.value || !loaded.value || active.value || !!pending.value || !goal.value.trim());
@@ -47,7 +48,7 @@ async function refresh() {
 
 async function submit() {
   if (disabled.value) return;
-  busy.value = true; error.value = '';
+  busy.value = true; submitError.value = '';
   try {
     const request = await prepareTask(domain.value, goal.value);
     const reply = await dispatchTask(request, (p: Pending) => {
@@ -63,7 +64,7 @@ async function submit() {
     if (e instanceof ApiRequestError && ['AI_ORIGIN','AI_REQUEST','AI_BODY','AI_FIELDS','AI_ARGUMENT','AI_TIMEOUT','AI_CONFIG','AI_OFFLINE','AI_BUSY','AI_REQUEST_REUSED','A1001','D3001'].includes(e.code || '')) {
       sessionStorage.removeItem(key.value); pending.value = null;
     }
-    error.value = formatApiError(e, '下达结果暂时不确定，正在查询原任务。');
+    submitError.value = formatApiError(e, '下达结果暂时不确定，正在查询原任务。');
   } finally { busy.value = false; }
 }
 
@@ -104,6 +105,7 @@ onBeforeUnmount(() => clearInterval(timer));
       <span v-if="active || pending" class="ml-3 text-sm text-muted-foreground">本台手机有任务正在执行或核对中</span>
     </form>
     <p v-if="error" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ error }}</p>
+    <p v-if="submitError" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ submitError }}</p>
     <section aria-label="任务记录" class="space-y-4">
       <div class="flex items-center justify-between"><h2 class="text-lg font-semibold">任务记录</h2>
         <button :disabled="loading" class="rounded border px-3 py-1 text-sm" @click="refresh">刷新状态</button></div>

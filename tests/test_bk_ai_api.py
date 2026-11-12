@@ -134,6 +134,13 @@ class AiApiTests(AsyncHTTPTestCase):
             self.assertEqual(self.request(body)[1]['data']['task_id'], row['task_id'])
             self.assertEqual(len(self.calls), 1)
 
+    def test_browser_uses_configured_public_origin_without_entrypoint_environment(self):
+        body = dict(goal='Read only', request_id=str(uuid.uuid4()))
+        with patch.dict(os.environ, {'BK_AI_ORIGIN': ''}), patch.object(api, 'PUBLIC_ORIGIN', 'https://pilot.example'):
+            code, result = self.request(body, headers={'Origin': 'https://pilot.example', 'X-Requested-With': 'BK-Task'})
+            self.assertEqual(code, 202)
+            self.assertEqual(result['data']['goal'], body['goal'])
+
     def test_browser_origin_and_explicit_header_are_required(self):
         body = dict(goal='Read only', request_id=str(uuid.uuid4()))
         with patch.dict(os.environ, {'BK_AI_ORIGIN': 'https://pilot.example'}):

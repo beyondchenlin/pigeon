@@ -52,7 +52,7 @@
     {
       "source": "server/bk_ai.py",
       "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_ai.py",
-      "sha256_lf": "3eb37c94307b9480e88f44ffcfd044683c1e55458d949eb537dc7b876175688d"
+      "sha256_lf": "7bb1bee82171ea5c524c1ecedc2d5139f0345067817da59878f87d470ca8eb40"
     },
     {
       "source": "server/bk_ai_store.py",
