@@ -48,7 +48,7 @@ onBeforeUnmount(() => clearInterval(timer));
         <div v-else class="p-6 bg-muted text-sm">截图未取得：{{ item.capture_reason }}。此记录不会触发业务重做。</div>
         <div class="space-y-2 p-4 text-sm"><strong>{{ phases[item.phase] || item.phase }}</strong> · 已归档 / 待人工核验
           <p>{{ new Date(item.captured_at_ms).toLocaleString() }}</p><p class="break-words">{{ item.note }}</p>
-          <p v-if="item.phase === 'chat_quiet' && item.quiet_ms === 300000 && item.quiet_method === 'verified_profile_ui_and_pixels_v1' && item.size > 0" class="text-emerald-700">手机已记录连续5分钟复查，并核对会话身份、可见内容与画面。范围：当时完整可见的会话内容；截图仍可人工复核。</p>
+          <p v-if="item.phase === 'chat_quiet' && item.quiet_ms === 300000 && item.quiet_method === 'verified_profile_ui_and_pixels_v1' && item.size > 0" class="text-emerald-700">手机已记录连续5分钟复查，并核对会话身份、可见内容与画面。{{ item.observation_scope === 'empty_visible_conversation' ? '可见会话列表为空，期间未观察到新增内容；不代表完整历史已加载。' : '范围：当时完整可见的会话内容。' }}截图仍可人工复核。</p>
           <details><summary class="cursor-pointer">追溯信息</summary><p class="break-all">任务：{{ item.task_id }}</p><p>执行屏：{{ item.display_id }}</p><p class="break-all">SHA-256：{{ item.sha256 || '无图' }}</p></details>
         </div>
       </article>

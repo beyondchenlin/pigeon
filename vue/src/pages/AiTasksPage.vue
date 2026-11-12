@@ -5,7 +5,7 @@ import { useHashPathname, toHashHref } from '@/lib/hash-router';
 import { prepareTask, dispatchTask, terminalTask } from '@/lib/task-request.mjs';
 
 type Receipt = { task_id: string; request_id: string; goal: string; status: string; error?: string;
-  created_at: number; result?: { answer?: string; message?: string; note?: string; prompt?: string; verified?: boolean } };
+  created_at: number; result?: { answer?: string; reason?: string; message?: string; note?: string; prompt?: string; verified?: boolean } };
 type Pending = { taskId: string; requestId: string };
 const path = useHashPathname();
 const domain = computed(() => path.value.split('/')[2] || '');
@@ -114,7 +114,7 @@ onBeforeUnmount(() => clearInterval(timer));
         <div class="flex flex-wrap justify-between gap-2"><strong>{{ names[task.status] || task.status }}</strong>
           <time class="text-sm text-muted-foreground">{{ new Date(task.created_at * 1000).toLocaleString() }}</time></div>
         <p class="whitespace-pre-wrap break-words">{{ task.goal }}</p>
-        <p v-if="task.result?.answer || task.result?.message || task.result?.prompt" class="whitespace-pre-wrap break-words border-l-2 pl-3">{{ task.result?.answer || task.result?.message || task.result?.prompt }}</p>
+        <p v-if="task.result?.answer || task.result?.reason || task.result?.message || task.result?.prompt" class="whitespace-pre-wrap break-words border-l-2 pl-3">{{ task.result?.answer || task.result?.reason || task.result?.message || task.result?.prompt }}</p>
         <p v-if="task.error" class="text-sm text-amber-700">{{ task.error }}</p>
         <p v-if="task.result?.note" class="text-sm text-muted-foreground">{{ task.result.note }}</p>
         <p v-if="task.status === 'done'" class="text-sm text-muted-foreground">执行已结束；实际结果请结合归档截图和复查记录核验。</p>
