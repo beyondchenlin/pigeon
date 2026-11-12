@@ -2,6 +2,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import time
 import uuid
 from tornado.ioloop import PeriodicCallback
@@ -13,6 +14,7 @@ from .bk_ai_transport import call, mapping, TransportError, refusal_code
 POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='bk-ai')
 INFLIGHT = set()
 KNOWN = frozenset(('starting', 'running', 'queued', 'paused', 'waiting_for_answer', 'waiting_on_phone', 'done', 'failed', 'cancelled'))
+DEFAULT_TIMEOUT_S = 900
 
 
 def apply_reply(task_id, reply, submitting=False):
@@ -83,8 +85,14 @@ async def poll():
 class AiHandler(BaseHttpService):
     def prepare(self):
         self.set_header('Cache-Control', 'no-store')
-        if self.request.method == 'POST' and self.request.headers.get('Origin'):
-            self.throw(403, 'AI_ORIGIN', 'Use an authenticated API client')
+        if self.request.method == 'POST':
+            origin = self.request.headers.get('Origin')
+            if origin:
+                allowed = {self.request.protocol + '://' + self.request.host, os.environ.get('BK_AI_ORIGIN', '')}
+                if origin not in allowed or self.request.headers.get('X-Requested-With') != 'BK-Task':
+                    self.throw(403, 'AI_ORIGIN', 'Use the same-origin task page or an authenticated API client')
+            elif self.get_cookie('token') and self.request.headers.get('X-Requested-With') != 'BK-Task':
+                self.throw(403, 'AI_REQUEST', 'Explicit task request required')
 
     def body(self):
         if len(self.request.body) > 20000:
@@ -98,15 +106,15 @@ class AiHandler(BaseHttpService):
             self.throw(400, 'AI_BODY', 'Expected a JSON object')
 
     def lookup(self, domain, task_id):
-        _, device = self.get_login_user_device(domain)
+        user, device = self.get_login_user_device(domain)
         with session_scope() as s:
-            row = s.query(AiTask).filter_by(id=task_id, device_id=device.id).first()
+            row = s.query(AiTask).filter_by(id=task_id, device_id=device.id, user_id=user.id).first()
             if row is None:
                 self.throw(404, 'AI_NOT_FOUND', 'No such task for this device')
             return describe(row)
 
     async def get(self, domain, task_id=None, action=None):
-        _, device = self.get_login_user_device(domain)
+        user, device = self.get_login_user_device(domain)
         if action:
             self.throw(405, 'AI_METHOD', 'POST required')
         if task_id:
@@ -115,7 +123,7 @@ class AiHandler(BaseHttpService):
             self.tell(self.lookup(domain, task_id))
         else:
             with session_scope() as s:
-                rows = s.query(AiTask).filter_by(device_id=device.id).order_by(AiTask.created.desc()).limit(50)
+                rows = s.query(AiTask).filter_by(device_id=device.id, user_id=user.id).order_by(AiTask.created.desc()).limit(50)
                 self.tell({'tasks': [describe(r) for r in rows]})
 
     async def post(self, domain, task_id=None, action=None):
@@ -137,15 +145,15 @@ class AiHandler(BaseHttpService):
         if set(body) - {'goal', 'request_id', 'timeout_s'}:
             self.throw(400, 'AI_FIELDS', 'Unsupported fields')
         goal, request_id = body.get('goal'), body.get('request_id')
-        timeout = body.get('timeout_s', 180)
+        timeout = body.get('timeout_s', DEFAULT_TIMEOUT_S)
         try:
             valid_id = str(uuid.UUID(request_id)) == request_id
         except (ValueError, TypeError, AttributeError):
             valid_id = False
         if not valid_id or not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 4000:
             self.throw(400, 'AI_ARGUMENT', 'goal and a canonical UUID request_id are required')
-        if type(timeout) is not int or not 15 <= timeout <= 600:
-            self.throw(400, 'AI_TIMEOUT', 'timeout_s must be an integer between 15 and 600')
+        if type(timeout) is not int or not 15 <= timeout <= 1800:
+            self.throw(400, 'AI_TIMEOUT', 'timeout_s must be an integer between 15 and 1800')
         goal = goal.strip()
         try:
             mapping(domain)
@@ -156,6 +164,8 @@ class AiHandler(BaseHttpService):
             current = locked_device(s, device.id)
             old = s.query(AiTask).filter_by(device_id=device.id, request_id=request_id).first()
             if old:
+                if old.user_id != user.id:
+                    self.throw(409, 'AI_REQUEST_REUSED', 'request_id is already in use')
                 if old.goal != goal or int(round(old.deadline - old.created)) != timeout:
                     self.throw(409, 'AI_REQUEST_REUSED', 'request_id already belongs to a different request')
                 self.tell(describe(old))

@@ -95,7 +95,7 @@ class AiApiTests(AsyncHTTPTestCase):
                     self.throw(401, 'AUTH', 'unauthorized')
                 with sessions() as s:
                     device = s.query(Device).filter_by(domain=domain).one()
-                    return SimpleNamespace(id=1), device
+                    return SimpleNamespace(id=int(self.request.headers.get('X-Test-User', '1'))), device
         return Application([(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover))?)?', Handler)], ctl=None)
 
     def request(self, body=None, suffix='', domain='phonea', headers=None):
@@ -120,6 +120,38 @@ class AiApiTests(AsyncHTTPTestCase):
         result = self.request(suffix='/' + task_id)[1]['data']
         self.assertEqual(result['result']['answer'], 'Android 14')
         self.assertEqual(result['status'], 'done')
+
+    def test_web_and_mcp_share_goal_and_default_budget(self):
+        body = dict(goal='搜索二糖，进入会话，静默5分钟后截图归档', request_id=str(uuid.uuid4()))
+        with patch.dict(os.environ, {'BK_AI_ORIGIN': 'https://pilot.example'}):
+            headers = {'Origin': 'https://pilot.example', 'X-Requested-With': 'BK-Task'}
+            code, result = self.request(body, headers=headers)
+            self.assertEqual(code, 202)
+            row = result['data']
+            self.assertEqual(row['goal'], body['goal'])
+            self.assertEqual(round(row['deadline'] - row['created_at']), 900)
+            self.assertEqual(self.calls[0][3]['goal'], body['goal'])
+            self.assertEqual(self.request(body)[1]['data']['task_id'], row['task_id'])
+            self.assertEqual(len(self.calls), 1)
+
+    def test_browser_origin_and_explicit_header_are_required(self):
+        body = dict(goal='Read only', request_id=str(uuid.uuid4()))
+        with patch.dict(os.environ, {'BK_AI_ORIGIN': 'https://pilot.example'}):
+            for headers in ({'Origin':'https://evil.example','X-Requested-With':'BK-Task'},
+                            {'Origin':'https://pilot.example'}, {'Origin':'null','X-Requested-With':'BK-Task'},
+                            {'Cookie':'token=any-cookie'}):
+                self.assertEqual(self.request(body, headers=headers)[0], 403)
+        self.assertEqual(self.calls, [])
+
+    def test_other_device_member_cannot_read_cancel_or_reuse_private_task(self):
+        body, (_, result) = self.submit()
+        task_id = result['data']['task_id']
+        headers = {'X-Test-User':'2'}
+        self.assertEqual(self.request(headers=headers)[1]['data']['tasks'], [])
+        self.assertEqual(self.request(suffix='/' + task_id, headers=headers)[0], 404)
+        self.assertEqual(self.request({}, '/' + task_id + '/cancel', headers=headers)[0], 404)
+        self.assertEqual(self.request(body, headers=headers)[0], 409)
+        self.assertEqual(len(self.calls), 1)
 
     def test_unknown_submit_and_poll_timeout_never_replay(self):
         body = dict(goal='Read only', request_id=str(uuid.uuid4()))

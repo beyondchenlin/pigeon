@@ -850,6 +850,7 @@ const onRemoveUser = async (uid: string | number) => {
             </div>
           </div>
           <a :href="toHashHref('/evidence/' + deviceId)" class="rounded border px-3 py-1.5 text-sm">查看任务证据</a>
+          <a :href="toHashHref('/ai/' + deviceId)" class="rounded border px-3 py-1.5 text-sm">AI 任务</a>
           <span :class="cn('inline-flex items-center gap-1.5 font-medium', statusTextColors[d.status])">
             <span :class="cn('inline-block h-2 w-2 rounded-full', statusDotColors[d.status])" />
             {{ t.deviceDetail.statusText[d.status] }}

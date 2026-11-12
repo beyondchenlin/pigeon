@@ -93,6 +93,9 @@ def create_server(api):
     from mcp.types import ToolAnnotations
     server = MCPServer('PIGEON BK tasks', version='0.1.0', log_level='WARNING', instructions=(
         'Submit high-level goals; the phone executes its own agent loop. Save request_id before submission. '
+        'The user only describes their goal: discover the authorized device, generate and persist the UUID yourself, '
+        'and use the default supervision limit. Do not ask the user for tool names, account IDs, UUIDs or timeout values. '
+        'Pass the user goal unchanged; execution and business reply rules are built into the phone. '
         'On an unknown response query the same deterministic task ID; never create a replacement automatically. '
         'A done task is NOT proof of a published video. Check platform evidence separately. '
         'The pilot has no fleet fan-out or automatic publish retries.'))
@@ -124,7 +127,7 @@ def create_server(api):
         return api.tasks(device_id, task_id)
 
     @server.tool(annotations=write, structured_output=True)
-    def submit_task(device_id: str, goal: str, request_id: str, timeout_s: int = 180) -> dict[str, Any]:
+    def submit_task(device_id: str, goal: str, request_id: str, timeout_s: int = 900) -> dict[str, Any]:
         """Run a high-level goal on one phone. Persist a fresh UUID first; reuse it for identical requests only.
 
         timeout_s is the current server supervision limit, not an offline phone deadline.
@@ -133,8 +136,8 @@ def create_server(api):
         canonical_uuid(request_id)
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 4000:
             raise ToolError('goal must contain 1..4000 characters')
-        if type(timeout_s) is not int or not 15 <= timeout_s <= 600:
-            raise ToolError('timeout_s must be an integer in 15..600')
+        if type(timeout_s) is not int or not 15 <= timeout_s <= 1800:
+            raise ToolError('timeout_s must be an integer in 15..1800')
         task_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'pigeon-bk:' + device_id + ':' + request_id))
         return {'task_id': task_id, 'request_id': request_id,
             **api.tasks(device_id, body={'goal': goal, 'request_id': request_id, 'timeout_s': timeout_s})}

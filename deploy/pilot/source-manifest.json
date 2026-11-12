@@ -52,12 +52,12 @@
     {
       "source": "server/bk_ai.py",
       "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_ai.py",
-      "sha256_lf": "bb2bb0a3d0a2dd4c8efbf34014f794a398b387fa49834418798555fff3501046"
+      "sha256_lf": "3eb37c94307b9480e88f44ffcfd044683c1e55458d949eb537dc7b876175688d"
     },
     {
       "source": "server/bk_ai_store.py",
       "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk-server/bk_ai_store.py",
-      "sha256_lf": "4b19c16ce20b0db3aa8cdf1063dd0ddc39a9f53620ccb96a8ed5fd59fa840326"
+      "sha256_lf": "cf951ea6832140e77e9575f68e0e494d88502c00fd01deae9db498af46f7c425"
     },
     {
       "source": "server/bk_ai_transport.py",
@@ -117,7 +117,7 @@
     {
       "source": "ops/bk_mcp.py",
       "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/bk_mcp.py",
-      "sha256_lf": "468bc1e56ba35545748b19a596cfd0f9449906d00b730642981310976b664692"
+      "sha256_lf": "5b769ff67dbff330c2181595a58ce86f045e5b58a298474a2f7bc4adc2e61f8e"
     },
     {
       "source": "ops/check_bk_forwarding.py",
@@ -142,7 +142,7 @@
     {
       "source": "ops/run_bk_server.py",
       "destination": "/opt/phone-pilot-20261108/pigeon/data/user/phone-pilot/run_bk_server.py",
-      "sha256_lf": "35dfcfc9673a25d17af9edcc95b8749a0821cecd0a7c5d43eac90ae3f81ae433"
+      "sha256_lf": "0a4c3bed188e46d66025d6997a295e3e505ca591b0957fecfad7c9855a47d6d4"
     },
     {
       "source": "ops/run_bk_worker.py",

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { apiRequest } from '@/lib/api';
-import { useHashPathname, toHashHref } from '@/lib/hash-router';
+import { useHashPathname, useHashLocation, toHashHref } from '@/lib/hash-router';
 const pathname = useHashPathname();
+const location = useHashLocation();
+const taskFilter = computed(() => new URLSearchParams(location.value.search).get('task'));
 const domain = computed(() => pathname.value.split('/')[2] || '');
-type Evidence = { evidence_id: string; task_id: string; phase: string; captured_at_ms: number; size: number; capture_status: string; capture_reason: string; note: string; display_id: number; sha256: string; };
+type Evidence = { evidence_id: string; task_id: string; phase: string; captured_at_ms: number; size: number; capture_status: string; capture_reason: string; note: string; display_id: number; sha256: string; quiet_ms?: number; quiet_method?: string; observation_scope?: string; };
 const items = ref<Evidence[]>([]);
+const shown = computed(() => items.value.filter(item => !taskFilter.value || item.task_id === taskFilter.value));
 const error = ref('');
 const sync = ref('waiting');
 const selected = ref<Evidence | null>(null);
@@ -33,17 +36,19 @@ onBeforeUnmount(() => clearInterval(timer));
       <button class="rounded border px-4 py-2" :disabled="busy" @click="refresh">刷新证据</button>
     </header>
     <p class="text-sm text-muted-foreground">仅查看已归档截图，不会启动远控或接管手机。截图用于人工核验，不能单独证明发布或消息已成功。</p>
-    <p role="status">同步：{{ sync === 'connected' ? '连接正常' : sync === 'retry_pending' ? '等待重连补传' : '等待同步' }} · {{ items.length }} 条记录</p>
+    <p role="status">同步：{{ sync === 'connected' ? '连接正常' : sync === 'retry_pending' ? '等待重连补传' : '等待同步' }} · {{ shown.length }} 条记录</p>
+    <p class="text-sm"><a :href="toHashHref('/ai/' + domain)" class="underline">返回 AI 任务</a><a v-if="taskFilter" :href="toHashHref('/evidence/' + domain)" class="ml-4 underline">查看全部证据</a></p>
     <p v-if="error" role="alert" class="text-red-600">{{ error }}</p>
-    <p v-if="!items.length && !error" class="rounded border p-8 text-muted-foreground">还没有归档证据。手机保存关键截图后会自动同步到这里。</p>
+    <p v-if="!shown.length && !error" class="rounded border p-8 text-muted-foreground">还没有归档证据。手机保存关键截图后会自动同步到这里。</p>
     <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <article v-for="item in items" :key="item.evidence_id" class="overflow-hidden rounded-lg border bg-card">
+      <article v-for="item in shown" :key="item.evidence_id" class="overflow-hidden rounded-lg border bg-card">
         <button v-if="item.size > 0" class="block w-full bg-muted p-2" @click="selected = item" :aria-label="'查看' + (phases[item.phase] || item.phase) + '截图'">
           <img :src="image(item)" loading="lazy" class="mx-auto h-64 object-contain" alt="任务关键截图" />
         </button>
         <div v-else class="p-6 bg-muted text-sm">截图未取得：{{ item.capture_reason }}。此记录不会触发业务重做。</div>
         <div class="space-y-2 p-4 text-sm"><strong>{{ phases[item.phase] || item.phase }}</strong> · 已归档 / 待人工核验
           <p>{{ new Date(item.captured_at_ms).toLocaleString() }}</p><p class="break-words">{{ item.note }}</p>
+          <p v-if="item.phase === 'chat_quiet' && item.quiet_ms === 300000 && item.quiet_method === 'verified_profile_ui_and_pixels_v1' && item.size > 0" class="text-emerald-700">手机已记录连续5分钟复查，并核对会话身份、可见内容与画面。范围：当时完整可见的会话内容；截图仍可人工复核。</p>
           <details><summary class="cursor-pointer">追溯信息</summary><p class="break-all">任务：{{ item.task_id }}</p><p>执行屏：{{ item.display_id }}</p><p class="break-all">SHA-256：{{ item.sha256 || '无图' }}</p></details>
         </div>
       </article>

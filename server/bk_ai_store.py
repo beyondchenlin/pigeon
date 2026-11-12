@@ -49,7 +49,7 @@ def change(row, status, error=None, snapshot=None):
 
 
 def describe(row):
-    return dict(task_id=row.id, request_id=row.request_id, status=row.status,
+    return dict(task_id=row.id, request_id=row.request_id, goal=row.goal, status=row.status,
         result=row.snapshot, error=row.error, created_at=row.created, updated_at=row.updated,
         deadline=row.deadline, cancel_requested=row.cancel_requested, history=row.history)
 

@@ -66,7 +66,7 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         async with Client(adapter.create_server(self.api)) as client:
             for tool, args in [('list_tasks', {'device_id': 'phoneb'}), ('list_evidence', {'device_id':'phoneb'}),
                 ('get_task', {'device_id': 'phonea', 'task_id': '../wrong'}),
-                ('submit_task', {'device_id': 'phonea', 'goal': 'x', 'request_id': str(uuid.uuid4()), 'timeout_s': 601})]:
+                ('submit_task', {'device_id': 'phonea', 'goal': 'x', 'request_id': str(uuid.uuid4()), 'timeout_s': 1801})]:
                 result = await client.call_tool(tool, args)
                 self.assertTrue(result.is_error)
             self.assertEqual(self.requests, [])
