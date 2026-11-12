@@ -142,6 +142,40 @@ class PhoneArbitrationTests(unittest.TestCase):
             phone.bridge(request)
             prepare.assert_called_once_with('/unused')
 
+    def answer_request(self):
+        with phone.state(self.root) as data:
+            data['ai'] = self.task
+        question = dict(task_id=self.task, status='waiting_for_answer', answerable=True,
+                        question='继续阅读？', options=['继续', '停止'], conversation='a', started_at_ms=1)
+        body = dict(text='继续', question_key=phone.question_key(question), request_id=str(uuid.uuid4()))
+        return dict(self.request, path='/api/v1/tasks/' + self.task + '/answer', body=body), question
+
+    def test_answer_forwards_only_text_once_even_after_unknown_response(self):
+        request, question = self.answer_request()
+        with patch.object(phone, 'api', side_effect=[{'http':200,'body':question},{'http':502,'body':{}}]) as api:
+            self.assertEqual(phone.bridge(request)['http'], 502)
+            self.assertEqual(phone.bridge(request)['http'], 409)
+            self.assertEqual(api.call_count, 2)
+            self.assertEqual(api.call_args_list[-1].args[3], {'text':'继续'})
+        self.assertNotIn('继续', (Path(self.root)/'state.json').read_text())
+
+    def test_answer_checks_live_question_and_never_approves_on_phone_confirmation(self):
+        for value in (dict(status='waiting_on_phone', answerable=False), dict(status='waiting_for_answer', answerable=True, question='Other?')):
+            request, question = self.answer_request()
+            with phone.state(self.root) as data:
+                data['answer_attempts'] = {}
+            with patch.object(phone, 'api', return_value={'http':200,'body':dict(question, **value)}) as api:
+                self.assertEqual(phone.bridge(request)['http'], 409)
+                self.assertEqual([c.args[1] for c in api.call_args_list], ['GET'])
+
+    def test_answer_manual_owner_blocks_before_api(self):
+        request, _ = self.answer_request()
+        with phone.state(self.root) as data:
+            data['manual'] = ['controller']
+        with patch.object(phone, 'api') as api:
+            self.assertEqual(phone.bridge(request)['http'], 409)
+            api.assert_not_called()
+
 
 class PreparationTests(unittest.TestCase):
     def test_ready_requires_no_secure_lock_and_live_helper(self):

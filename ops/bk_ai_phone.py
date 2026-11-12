@@ -15,6 +15,7 @@ import time
 import urllib.request
 import urllib.error
 import uuid
+import hashlib
 
 TERMINAL = frozenset(('done', 'failed', 'cancelled'))
 DEFAULT_INFO = '/sdcard/Android/data/com.beyondchenlin.bk101/files/mcp-usb.json'
@@ -72,7 +73,7 @@ def state(root):
 
 
 def api(info, method, path, body=None):
-    task_path = method in ('GET', 'POST') and re.fullmatch(r'/api/v1(?:/device|/tasks(?:/[a-f0-9-]{36}(?:/cancel)?)?)?', path)
+    task_path = method in ('GET', 'POST') and re.fullmatch(r'/api/v1(?:/device|/tasks(?:/[a-f0-9-]{36}(?:/(?:cancel|answer))?)?)?', path)
     evidence_path = (method == 'GET' and re.fullmatch(r'/api/v1/evidence(?:/[a-f0-9-]{36}/chunk/[0-9]{1,7})?', path)) or (method == 'POST' and re.fullmatch(r'/api/v1/evidence/[a-f0-9-]{36}/ack', path))
     if not (task_path or evidence_path):
         return {'http': 400, 'body': {'error': {'code': 'unsupported_operation'}}}
@@ -127,6 +128,8 @@ def prepare_unsecured(info):
 def bridge(request):
     root, info = request['state_dir'], request['info']
     method, path, body = request['method'], request['path'], request.get('body')
+    if method == 'POST' and re.fullmatch(r'/api/v1/tasks/[a-f0-9-]{36}/answer', path):
+        return answer_once(root, info, path, body)
     if method == 'POST' and path == '/api/v1/tasks':
         task_id = body.get('request_id') if isinstance(body, dict) else None
         if not isinstance(task_id, str) or str(uuid.UUID(task_id)) != task_id:
@@ -139,6 +142,7 @@ def bridge(request):
                 # Even a duplicate at the bridge never repeats creation.
                 return api(info, 'GET', '/api/v1/tasks/' + task_id)
             data['ai'] = task_id
+            data['answer_attempts'] = {}
         # Persist the reservation before dispatch. Manual takeover sees this ID.
         with state(root) as data:
             if data.get('manual'):
@@ -163,6 +167,44 @@ def bridge(request):
             if data.get('ai') == task.get('task_id'):
                 data['ai'] = None
     return reply
+
+
+def question_key(body):
+    if body.get('status') != 'waiting_for_answer' or body.get('answerable') is not True or not body.get('question'):
+        return None
+    value = {k: body.get(k) for k in ('task_id', 'conversation', 'started_at_ms', 'question', 'options')}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def answer_once(root, info, path, body):
+    def refused(code):
+        return {'http': 409, 'body': {'error': {'code': code}}}
+    task_id = path.split('/')[4]
+    if (not isinstance(body, dict) or set(body) != {'text', 'question_key', 'request_id'}
+            or not isinstance(body['text'], str) or not 1 <= len(body['text'].strip()) <= 2000
+            or not isinstance(body['question_key'], str) or not re.fullmatch('[a-f0-9]{64}', body['question_key'])
+            or not isinstance(body['request_id'], str) or not re.fullmatch('[a-f0-9-]{36}', body['request_id'])):
+        return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
+    key = body['question_key']
+    # One attempt per question signature. Identical later questions fail closed
+    # until the phone exposes an atomic question-generation token.
+    with state(root) as data:
+        if data.get('ai') != task_id or data.get('manual') or process_identity(data.get('guard_pid')) != data.get('guard_identity') or not data.get('guard_identity'):
+            return refused('control_busy_or_guard_unavailable')
+        attempts = data.setdefault('answer_attempts', {})
+        if key in attempts or len(attempts) >= 20:
+            return refused('answer_already_attempted')
+        attempts[key] = body['request_id']
+    # Reservation is durable before any write to BK. No automatic retry, even
+    # if the read or POST response disappears. Credentials and text stay out of state.
+    with state(root) as data:
+        if data.get('manual') or data.get('ai') != task_id:
+            return refused('manual_takeover')
+        current = api(info, 'GET', '/api/v1/tasks/' + task_id)
+        value = current.get('body', {})
+        if current['http'] != 200 or value.get('task_id') != task_id or question_key(value) != key:
+            return refused('question_changed')
+        return api(info, 'POST', path, {'text': body['text']})
 
 
 def activate_guard(root):

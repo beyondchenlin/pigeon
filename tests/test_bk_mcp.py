@@ -77,6 +77,15 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(result.is_error)
             self.assertEqual(self.requests,[('GET','/api/v1/device/phonea/ai/evidence',None)])
 
+    async def test_answer_uses_existing_task_and_current_question_without_new_task(self):
+        task_id, request_id = str(uuid.uuid4()), str(uuid.uuid4())
+        async with Client(adapter.create_server(self.api)) as client:
+            result = await client.call_tool('answer_task', dict(device_id='phonea', task_id=task_id,
+                request_id=request_id, question_key='a'*64, text='Continue reading only'))
+            self.assertFalse(result.is_error)
+        self.assertEqual(self.requests, [('POST', '/api/v1/device/phonea/ai/tasks/' + task_id + '/answer',
+            dict(question_key='a'*64, text='Continue reading only', request_id=request_id))])
+
     async def test_backend_failure_is_tool_error_without_retry(self):
         self.response_status = 503
         async with Client(adapter.create_server(self.api)) as client:

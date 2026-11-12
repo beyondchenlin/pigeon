@@ -41,7 +41,7 @@ class ApiClient:
             canonical_uuid(task_id)
             path += '/' + task_id
         if action is not None:
-            if action not in ('cancel', 'takeover') or task_id is None:
+            if action not in ('cancel', 'takeover', 'answer') or task_id is None:
                 raise ToolError('Unsupported task action')
             path += '/' + action
         return self.request(path, body)
@@ -141,6 +141,18 @@ def create_server(api):
         task_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'pigeon-bk:' + device_id + ':' + request_id))
         return {'task_id': task_id, 'request_id': request_id,
             **api.tasks(device_id, body={'goal': goal, 'request_id': request_id, 'timeout_s': timeout_s})}
+
+    @server.tool(annotations=write, structured_output=True)
+    def answer_task(device_id: str, task_id: str, question_key: str, text: str, request_id: str) -> dict[str, Any]:
+        """Reply once to the current ordinary question. Read question_key from get_task; generate request_id yourself.
+
+        Only convey the user's answer or a continuation already within their authorized scope.
+        Never answer waiting_on_phone. On any ambiguous response, query the original task; do not resend.
+        """
+        canonical_uuid(request_id)
+        if not re.fullmatch('[a-f0-9]{64}', question_key) or not 1 <= len(text.strip()) <= 2000:
+            raise ToolError('A current question_key and 1..2000 character reply are required')
+        return api.tasks(device_id, task_id, 'answer', dict(question_key=question_key, text=text, request_id=request_id))
 
     @server.tool(annotations=write, structured_output=True)
     def cancel_task(device_id: str, task_id: str) -> dict[str, Any]:

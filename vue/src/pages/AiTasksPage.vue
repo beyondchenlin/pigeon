@@ -5,7 +5,8 @@ import { useHashPathname, toHashHref } from '@/lib/hash-router';
 import { prepareTask, dispatchTask, terminalTask } from '@/lib/task-request.mjs';
 
 type Receipt = { task_id: string; request_id: string; goal: string; status: string; error?: string;
-  created_at: number; result?: { answer?: string; reason?: string; message?: string; note?: string; prompt?: string; verified?: boolean } };
+  question_key?: string; answer_submission?: {request_id: string; status: string};
+  created_at: number; result?: { answer?: string; reason?: string; message?: string; note?: string; prompt?: string; question?: string; options?: string[]; answerable?: boolean; verified?: boolean } };
 type Pending = { taskId: string; requestId: string };
 const path = useHashPathname();
 const domain = computed(() => path.value.split('/')[2] || '');
@@ -17,6 +18,11 @@ const loading = ref(false);
 const loaded = ref(false);
 const error = ref('');
 const submitError = ref('');
+const answerDrafts = ref<Record<string,string>>({});
+const answerAttempts = ref<Record<string,boolean>>({});
+const answerError = ref('');
+const answerKey = (task: Receipt) => `bk-answer:${domain.value}:${task.task_id}:${task.question_key}`;
+const answerAttempted = (task: Receipt) => !!task.answer_submission || !!answerAttempts.value[answerKey(task)];
 const key = computed(() => `bk-task-pending:${domain.value}`);
 const active = computed(() => receipts.value.some(r => !terminalTask(r.status)));
 const disabled = computed(() => busy.value || !loaded.value || active.value || !!pending.value || !goal.value.trim());
@@ -31,6 +37,9 @@ async function refresh() {
     const reply = await apiRequest<{tasks: Receipt[]}>(`/api/v1/device/${domain.value}/ai/tasks`, {cache:'no-store'});
     if (!reply.data?.tasks) throw new Error('未取得任务记录');
     receipts.value = reply.data.tasks;
+    for (const task of receipts.value) {
+      if (task.question_key && sessionStorage.getItem(answerKey(task))) answerAttempts.value[answerKey(task)] = true;
+    }
     loaded.value = true;
     if (pending.value) {
       const p = pending.value;
@@ -79,6 +88,28 @@ async function cancel(task: Receipt) {
   } catch (e) { error.value = formatApiError(e, '停止状态待核对'); }
   finally { busy.value = false; }
 }
+
+async function answer(task: Receipt) {
+  const text = (answerDrafts.value[task.task_id] || '').trim();
+  if (busy.value || !text || !task.question_key || task.status !== 'waiting_for_answer' || answerAttempted(task)) return;
+  busy.value = true; answerError.value = '';
+  const storageKey = answerKey(task);
+  try {
+    const requestId = crypto.randomUUID();
+    sessionStorage.setItem(storageKey, requestId); // Receipt first; no reply text or automatic replay.
+    answerAttempts.value[storageKey] = true;
+    await apiRequest(`/api/v1/device/${domain.value}/ai/tasks/${task.task_id}/answer`, {
+      method:'POST', headers:{'X-Requested-With':'BK-Task'}, signal:AbortSignal.timeout(45000),
+      body:JSON.stringify({text, question_key:task.question_key, request_id:requestId}),
+    });
+    answerDrafts.value[task.task_id] = '';
+  } catch (e) {
+    if (e instanceof ApiRequestError && ['AI_ANSWER_ARGUMENT','AI_ANSWER_BUSY','AI_QUESTION_CLOSED','AI_ORIGIN','AI_REQUEST','AUTH'].includes(e.code || '')) {
+      sessionStorage.removeItem(storageKey); delete answerAttempts.value[storageKey];
+    }
+    answerError.value = formatApiError(e, '答复是否送达仍在核对。不会重复发送，请查看原任务状态。');
+  } finally { busy.value = false; await refresh(); }
+}
 onMounted(() => {
   try {
     const saved = JSON.parse(sessionStorage.getItem(key.value) || 'null');
@@ -106,6 +137,7 @@ onBeforeUnmount(() => clearInterval(timer));
     </form>
     <p v-if="error" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ error }}</p>
     <p v-if="submitError" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ submitError }}</p>
+    <p v-if="answerError" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ answerError }}</p>
     <section aria-label="任务记录" class="space-y-4">
       <div class="flex items-center justify-between"><h2 class="text-lg font-semibold">任务记录</h2>
         <button :disabled="loading" class="rounded border px-3 py-1 text-sm" @click="refresh">刷新状态</button></div>
@@ -118,7 +150,19 @@ onBeforeUnmount(() => clearInterval(timer));
         <p v-if="task.error" class="text-sm text-amber-700">{{ task.error }}</p>
         <p v-if="task.result?.note" class="text-sm text-muted-foreground">{{ task.result.note }}</p>
         <p v-if="task.status === 'done'" class="text-sm text-muted-foreground">执行已结束；实际结果请结合归档截图和复查记录核验。</p>
-        <p v-if="task.status === 'waiting_for_answer' || task.status === 'waiting_on_phone'" class="text-sm text-amber-700">本轮需要补充处理，请查看手机上的提示。网页追问回复暂未接入。</p>
+        <form v-if="task.status === 'waiting_for_answer' && task.result?.answerable && task.question_key" class="space-y-3 rounded border p-3" @submit.prevent="answer(task)">
+          <p class="whitespace-pre-wrap break-words font-medium">{{ task.result.question }}</p>
+          <template v-if="!answerAttempted(task)">
+            <div v-if="task.result.options?.length" class="flex flex-wrap gap-2">
+              <button v-for="option in task.result.options" :key="option" type="button" :disabled="busy" class="rounded border px-3 py-2 text-sm" @click="answerDrafts[task.task_id] = option">{{ option }}</button>
+            </div>
+            <label :for="'task-answer-' + task.task_id" class="block text-sm">补充说明</label>
+            <textarea :id="'task-answer-' + task.task_id" v-model="answerDrafts[task.task_id]" maxlength="2000" rows="3" class="w-full rounded border bg-background p-2" />
+            <button type="submit" :disabled="busy || !answerDrafts[task.task_id]?.trim()" class="rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50">答复并继续原任务</button>
+          </template>
+          <p v-else class="text-sm text-muted-foreground">{{ task.answer_submission?.status === 'rejected' ? '答复未被接收。请核对手机当前提示；本次答复不会重发。' : '本问题已有答复提交记录，正在核对后续状态，不会重复发送。' }}</p>
+        </form>
+        <p v-if="task.status === 'waiting_on_phone'" class="text-sm text-amber-700">这一步需要在手机处理，请查看手机提示；网页不能代替系统授权或身份验证。</p>
         <div class="flex gap-4 text-sm"><a :href="toHashHref('/evidence/' + domain + '?task=' + task.task_id)" class="underline">查看本次证据</a>
           <button v-if="!terminalTask(task.status)" :disabled="busy" class="underline" @click="cancel(task)">停止任务</button></div>
       </article>

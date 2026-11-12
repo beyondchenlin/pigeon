@@ -17,7 +17,7 @@ from tornado.web import Application
 from tornado.platform.asyncio import BaseAsyncIOLoop
 from executor.models import Device, Task
 from server import bk_ai as api
-from server.bk_ai_store import AiTask, active, script_busy
+from server.bk_ai_store import AiTask, AiAnswer, active, script_busy
 
 
 class PollStartupTests(unittest.TestCase):
@@ -52,7 +52,7 @@ class PollStartupTests(unittest.TestCase):
 class AiApiTests(AsyncHTTPTestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
-        for table in (Device.__table__, Task.__table__, AiTask.__table__):
+        for table in (Device.__table__, Task.__table__, AiTask.__table__, AiAnswer.__table__):
             table.create(self.engine)
         factory = sessionmaker(self.engine, expire_on_commit=False)
         @contextmanager
@@ -70,6 +70,9 @@ class AiApiTests(AsyncHTTPTestCase):
                 self.remote[body['request_id']] = dict(task_id=body['request_id'], status='running', step=1)
                 return dict(http=201, body=self.remote[body['request_id']])
             task_id = path.split('/')[4]
+            if path.endswith('/answer'):
+                self.remote[task_id] = dict(task_id=task_id, status='running')
+                return dict(http=200, body=dict(task_id=task_id, accepted=True))
             if path.endswith('/cancel'):
                 self.remote[task_id] = dict(task_id=task_id, status='cancelled')
                 return dict(http=202, body={'accepted': True})
@@ -96,7 +99,7 @@ class AiApiTests(AsyncHTTPTestCase):
                 with sessions() as s:
                     device = s.query(Device).filter_by(domain=domain).one()
                     return SimpleNamespace(id=int(self.request.headers.get('X-Test-User', '1'))), device
-        return Application([(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover))?)?', Handler)], ctl=None)
+        return Application([(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover|answer))?)?', Handler)], ctl=None)
 
     def request(self, body=None, suffix='', domain='phonea', headers=None):
         reply = self.fetch('/api/v1/device/' + domain + '/ai/tasks' + suffix,
@@ -247,6 +250,46 @@ class AiApiTests(AsyncHTTPTestCase):
     def test_malformed_phone_reply_remains_unresolved(self):
         with patch.object(api, 'call', return_value={'http':200,'body':[]}):
             self.assertEqual(self.submit()[1][1]['data']['status'], 'unknown')
+
+    def question(self):
+        _, (_, result) = self.submit()
+        task_id = result['data']['task_id']
+        self.remote[task_id] = dict(task_id=task_id, status='waiting_for_answer', answerable=True,
+                                    question='Continue reading?', options=['yes', 'no'])
+        result = self.request(suffix='/' + task_id)[1]['data']
+        return task_id, dict(request_id=str(uuid.uuid4()), question_key=result['question_key'], text='yes')
+
+    def test_answer_continues_same_task_once_and_cannot_reuse_id(self):
+        task_id, body = self.question()
+        self.assertEqual(self.request(body, '/' + task_id + '/answer')[1]['data']['status'], 'running')
+        self.assertEqual(self.request(body, '/' + task_id + '/answer')[0], 200)
+        self.assertEqual(self.request(dict(body, text='no'), '/' + task_id + '/answer')[0], 409)
+        self.assertEqual(len([c for c in self.calls if c[2].endswith('/answer')]), 1)
+        self.assertEqual(len([c for c in self.calls if c[1:3] == ('POST','/api/v1/tasks')]), 1)
+
+    def test_ambiguous_answer_persists_and_never_replays_after_restart_or_new_id(self):
+        task_id, body = self.question()
+        with patch.object(api, 'call', side_effect=api.TransportError('connection_unknown')) as call:
+            self.assertEqual(self.request(body, '/' + task_id + '/answer')[0], 200)
+            self.request(body, '/' + task_id + '/answer')
+            self.assertEqual(len([c for c in call.call_args_list if c.args[1] == 'POST']), 1)
+        # A later identical question is conservatively kept closed, even with a fresh UUID.
+        state = self.request(suffix='/' + task_id)[1]['data']
+        self.assertEqual(state['answer_submission']['status'], 'unknown')
+        self.assertEqual(self.request(dict(body, request_id=str(uuid.uuid4())), '/' + task_id + '/answer')[0], 409)
+
+    def test_answer_owner_stale_question_phone_confirmation_and_cancel_guards(self):
+        task_id, body = self.question()
+        self.assertEqual(self.request(body, '/' + task_id + '/answer', headers={'X-Test-User':'2'})[0], 404)
+        self.assertEqual(self.request(dict(body, question_key='a'*64), '/' + task_id + '/answer')[0], 409)
+        with self.sessions() as s:
+            s.get(AiTask, task_id).status = 'waiting_on_phone'
+        self.assertEqual(self.request(body, '/' + task_id + '/answer')[0], 409)
+        with self.sessions() as s:
+            row = s.get(AiTask, task_id)
+            row.status, row.cancel_requested = 'waiting_for_answer', True
+        self.assertEqual(self.request(body, '/' + task_id + '/answer')[0], 409)
+        self.assertFalse(any(c[2].endswith('/answer') for c in self.calls))
 
 
 if __name__ == '__main__':

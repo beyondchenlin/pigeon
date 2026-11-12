@@ -6,10 +6,11 @@ import logging
 import os
 import time
 import uuid
+import hashlib
 from tornado.ioloop import PeriodicCallback
 from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device
-from .bk_ai_store import AiTask, TERMINAL, active, locked_device, script_busy, change, describe, install_script_guard
+from .bk_ai_store import AiTask, AiAnswer, question_key, TERMINAL, active, locked_device, script_busy, change, describe, install_script_guard
 from .bk_ai_transport import call, mapping, TransportError, refusal_code
 from .bk_maintenance import PUBLIC_ORIGIN
 
@@ -84,6 +85,24 @@ async def poll():
     await asyncio.gather(*(perform(task_id) for task_id in ids))
 
 
+def deliver_answer(domain, task_id, request_id, key, text):
+    # The durable attempt already exists. A restart/lost response never replays it.
+    status = 'unknown'
+    try:
+        reply = call(domain, 'POST', '/api/v1/tasks/' + task_id + '/answer',
+                     dict(text=text, question_key=key, request_id=request_id))
+        body = reply.get('body', {})
+        if reply['http'] == 200 and isinstance(body, dict) and body.get('accepted') is True and body.get('task_id') == task_id:
+            status = 'accepted'
+        elif reply['http'] in (400, 401, 403, 404, 409, 422):
+            status = 'rejected'
+    except TransportError:
+        pass
+    with session_scope() as s:
+        s.get(AiAnswer, request_id).status = status
+    reconcile(task_id)
+
+
 class AiHandler(BaseHttpService):
     def prepare(self):
         self.set_header('Cache-Control', 'no-store')
@@ -115,7 +134,7 @@ class AiHandler(BaseHttpService):
             row = s.query(AiTask).filter_by(id=task_id, device_id=device.id, user_id=user.id).first()
             if row is None:
                 self.throw(404, 'AI_NOT_FOUND', 'No such task for this device')
-            return describe(row)
+            return describe(row, s)
 
     async def get(self, domain, task_id=None, action=None):
         user, device = self.get_login_user_device(domain)
@@ -128,13 +147,16 @@ class AiHandler(BaseHttpService):
         else:
             with session_scope() as s:
                 rows = s.query(AiTask).filter_by(device_id=device.id, user_id=user.id).order_by(AiTask.created.desc()).limit(50)
-                self.tell({'tasks': [describe(r) for r in rows]})
+                self.tell({'tasks': [describe(r, s) for r in rows]})
 
     async def post(self, domain, task_id=None, action=None):
         user, device = self.get_login_user_device(domain)
         body = self.body()
         if task_id:
             self.lookup(domain, task_id)
+            if action == 'answer':
+                await self.answer(domain, device, task_id, body)
+                return
             if action not in ('cancel', 'takeover') or body:
                 self.throw(400, 'AI_ACTION', 'Use cancel or takeover with an empty object')
             with session_scope() as s:
@@ -172,7 +194,7 @@ class AiHandler(BaseHttpService):
                     self.throw(409, 'AI_REQUEST_REUSED', 'request_id is already in use')
                 if old.goal != goal or int(round(old.deadline - old.created)) != timeout:
                     self.throw(409, 'AI_REQUEST_REUSED', 'request_id already belongs to a different request')
-                self.tell(describe(old))
+                self.tell(describe(old, s))
                 return
             if current.state != 'online':
                 self.throw(503, 'AI_OFFLINE', 'Device is offline; nothing was submitted')
@@ -186,6 +208,42 @@ class AiHandler(BaseHttpService):
         # Durable receipt precedes the only creation attempt. Restart only polls.
         await perform(task_id, submit=True)
         self.set_status(202)
+        self.tell(self.lookup(domain, task_id))
+
+    async def answer(self, domain, device, task_id, body):
+        text, key, request_id = body.get('text'), body.get('question_key'), body.get('request_id')
+        try:
+            valid_id = str(uuid.UUID(request_id)) == request_id
+        except (ValueError, TypeError, AttributeError):
+            valid_id = False
+        if (set(body) != {'text', 'question_key', 'request_id'} or not valid_id
+                or not isinstance(text, str) or not 1 <= len(text.strip()) <= 2000
+                or not isinstance(key, str) or len(key) != 64):
+            self.throw(400, 'AI_ANSWER_ARGUMENT', 'A question key, reply text and canonical request UUID are required')
+        text = text.strip()
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        with session_scope() as s:
+            current = locked_device(s, device.id)
+            row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+            old = s.get(AiAnswer, request_id)
+            if old:
+                if (old.task_id, old.question_key, old.text_sha256) != (task_id, key, digest):
+                    self.throw(409, 'AI_ANSWER_REUSED', 'Reply ID already belongs to another answer')
+                self.tell(describe(row, s))
+                return
+            if (row.status != 'waiting_for_answer' or question_key(row.snapshot) != key
+                    or row.cancel_requested or time.time() >= row.deadline):
+                self.throw(409, 'AI_QUESTION_CLOSED', 'Refresh this task; the question is no longer answerable')
+            if s.query(AiAnswer).filter_by(task_id=task_id, question_key=key).first():
+                self.throw(409, 'AI_ANSWER_ATTEMPTED', 'This question already has a reply attempt; do not resend')
+            if task_id in INFLIGHT or current.controlling or current.state != 'online':
+                self.throw(409, 'AI_ANSWER_BUSY', 'Wait for the current task status check or controller to finish')
+            s.add(AiAnswer(id=request_id, task_id=task_id, question_key=key, text_sha256=digest, status='attempted'))
+        INFLIGHT.add(task_id)
+        try:
+            await asyncio.get_running_loop().run_in_executor(POOL, deliver_answer, domain, task_id, request_id, key, text)
+        finally:
+            INFLIGHT.discard(task_id)
         self.tell(self.lookup(domain, task_id))
 
 
@@ -219,11 +277,12 @@ def install():
     if getattr(Service, '_bk_ai_installed', False):
         return
     AiTask.__table__.create(engine, checkfirst=True)
+    AiAnswer.__table__.create(engine, checkfirst=True)
     install_script_guard()
     original = Service.__init__
     def initialize(self, *args, **kwargs):
         original(self, *args, **kwargs)
-        self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover))?)?',
+        self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover|answer))?)?',
                               'server.bk_ai', handler='AiHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/evidence(?:/([a-f0-9-]{36})/image)?',
                               'server.bk_evidence', handler='EvidenceHandler')
