@@ -141,7 +141,21 @@ try {
   await waitFor(textIncludes('手机执行中'));
   assert.equal(state.posts,1);
   assert.ok(await evaluate('sessionStorage.getItem("bk-task-pending:phonea")!==null'));
-  passed('reload restores original receipt without business replay');
+  browseRow.status='unknown';browseRow.error='phone_http_404';browseRow.updated_at=now();
+  await refresh();await waitFor(textIncludes('暂未查到手机收据，继续核对原任务。'));
+  assert.ok(await evaluate(textIncludes('正在核对执行状态')));
+  assert.equal(await evaluate(textIncludes('phone_http_404')),false);
+  assert.equal(await evaluate(textIncludes('任务不存在')),false);
+  assert.equal(await evaluate(textIncludes('手机未执行')),false);
+  await fill('#task-goal','待核对期间不应再提交');
+  assert.equal(await evaluate('document.querySelector("form button[type=submit]").disabled'),true);
+  await evaluate('[...document.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
+  assert.ok(await evaluate(textIncludes('phone_http_404')));
+  await evaluate('[...document.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
+  browseRow.status='running';delete browseRow.error;browseRow.updated_at=now();
+  await refresh();await waitFor(textIncludes('手机执行中'));
+  assert.equal(state.posts,1);
+  passed('reload restores the original receipt; a missing phone receipt stays pending in Chinese without business replay');
 
   await clickText('停止任务');
   await waitFor(textIncludes('停止待确认'));
@@ -179,13 +193,24 @@ try {
   question.status='done';question.updated_at=now();
   browseRow.status='done';browseRow.cancel_requested=false;browseRow.updated_at=now()+1;
   const started=Date.now()-7200000, finished=Date.now();
-  browseRow.result={run_id:'run-1',execution_result:{actual_started_at_ms:started,finished_at_ms:finished,last_progress_at_ms:finished-1000,
+  const measuredSuccess='Browse duration elapsed; measured progress requirements met.';
+  browseRow.result={run_id:'run-1',answer:measuredSuccess,execution_result:{actual_started_at_ms:started,finished_at_ms:finished,last_progress_at_ms:finished-1000,
     elapsed_ms:7200000,active_ms:6600000,waiting_ms:300000,paused_ms:100000,stalled_ms:200000,observations:80,
     duration_reached:true,business_success:true,execution_finished:true,reason:'duration_elapsed',
     usage:{reported_tokens:24000,input_tokens:20000,output_tokens:4000,model_calls:50,unreported_calls:0},
     evidence:{state:'missing',reason:'synthetic_capture_failure'}}};
   await call('Page.reload');await waitFor(textIncludes('完整浏览验收未通过'));
   assert.ok(await evaluate(textIncludes('有效执行：6600秒')));
+  const successArticle='[...document.querySelectorAll("article")].find(x=>x.textContent.includes("只浏览，不互动"))';
+  assert.equal(await evaluate(successArticle+'.querySelector(".border-l-2").textContent'),'浏览时长已到，实测进展已达到本次要求。');
+  assert.equal(await evaluate(successArticle+'.innerText.includes('+JSON.stringify(measuredSuccess)+')'),false);
+  await evaluate('[...'+successArticle+'.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
+  assert.ok(await evaluate(successArticle+'.innerText.includes('+JSON.stringify(measuredSuccess)+')'));
+  await evaluate('[...'+successArticle+'.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
+  question.result.answer='保留普通回答：'+measuredSuccess;question.updated_at=now();
+  await refresh();await waitFor(textIncludes(question.result.answer));
+  question.result.answer='constructor';question.updated_at=now();
+  await refresh();await waitFor('[...document.querySelectorAll("article")].find(x=>x.textContent.includes("合成追问任务")).querySelector(".border-l-2").textContent==="constructor"');
   const evidence={state:'captured',evidence_id:'00000000-0000-4000-8000-000000000003',task_id:'wrong-task',run_id:'run-1',
     display_id:3,captured_at_ms:finished-20,source:'bk_task_display',capture_timing:'terminal_before_release',late_capture:false};
   browseRow.result.execution_result.evidence=evidence;browseRow.updated_at=now()+2;

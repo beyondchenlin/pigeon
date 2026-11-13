@@ -55,7 +55,7 @@ const reasonText = (reason?: string) => ({duration_elapsed:'业务期限已到',
 const taskErrorText = (error: string) => {
   // The phone can prefix its budget failure with the surrounding model error.
   const code = /^(?:模型调用异常:)?model_usage_unreported(?::|$)/.test(error) ? 'model_usage_unreported' : error;
-  return ({
+  const messages: Record<string,string> = {
   unsupported_execution_contract:'手机版本不支持本次执行约定，请核对候选包版本。',
   execution_response_mismatch:'手机返回的执行约定不一致，已请求停止并继续核对。',
   unconfirmed_phone_terminal:'手机终态证据不完整，仍保持占用并继续核对。',
@@ -63,14 +63,17 @@ const taskErrorText = (error: string) => {
   capability_check_unavailable:'尚未取得手机能力信息，本次任务未派发。',
   connection_unknown:'连接状态待核对，保留原任务编号继续查询。',
   delivery_unknown:'请求是否送达待核对，保留原任务编号继续查询。',
+  phone_http_404:'暂未查到手机收据，继续核对原任务。',
   supervision_expired:'服务器监督期限已到，已请求停止，等待手机确认。',
   model_usage_unreported:'模型未报告本次用量，无法核对预算。',
   budget_exhausted:'模型用量已达到本次预算，任务无法继续执行。',
-  actual_task_display_unavailable:'本次未取得可用于结束证据的实际执行画面。'
-  } as Record<string,string>)[code] || error;
+  actual_task_display_unavailable:'本次未取得可用于结束证据的实际执行画面。',
+  'Browse duration elapsed; measured progress requirements met.':'浏览时长已到，实测进展已达到本次要求。'
+  };
+  return Object.prototype.hasOwnProperty.call(messages, code) ? messages[code] : error;
 };
 const taskDiagnostics = (task: Receipt) => [
-  ['任务错误', task.error], ['手机结束原因', task.result?.reason],
+  ['任务错误', task.error], ['手机回答', task.result?.answer], ['手机结束原因', task.result?.reason],
   ['执行结束原因', task.result?.execution_result?.reason], ['截图缺失原因', task.result?.execution_result?.evidence?.reason]
 ].filter(([, raw]) => raw && taskErrorText(raw) !== raw).map(([name, raw]) => name + '：' + raw).join('\n');
 const validEndEvidence = (task: Receipt) => {
@@ -296,7 +299,7 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
           <p v-if="progressFor(task).step" class="whitespace-pre-wrap break-words">步骤：{{ progressFor(task).step }}</p>
           <p v-if="progressFor(task).stale">连接或执行状态仍在核对；以下结果可能是旧快照，不代表手机当前状态。</p>
         </div>
-        <p v-if="task.result?.answer || task.result?.reason || task.result?.message || task.result?.prompt" class="whitespace-pre-wrap break-words border-l-2 pl-3">{{ task.result?.answer || (task.result?.reason ? taskErrorText(task.result.reason) : task.result?.message || task.result?.prompt) }}</p>
+        <p v-if="task.result?.answer || task.result?.reason || task.result?.message || task.result?.prompt" class="whitespace-pre-wrap break-words border-l-2 pl-3">{{ task.result?.answer ? taskErrorText(task.result.answer) : (task.result?.reason ? taskErrorText(task.result.reason) : task.result?.message || task.result?.prompt) }}</p>
         <p v-if="task.stop_confirmation_overdue" class="text-sm text-amber-700">已超过停止确认目标，尚未确认手机停止；设备继续保持占用。</p>
         <p v-if="isStopping(task)" role="status" class="rounded border border-amber-500 p-3 text-sm">已请求停止，正在核对手机是否实际结束。本台手机仍被占用，确认终态后才能下达新任务。</p>
         <p v-if="task.error" class="text-sm text-amber-700">{{ taskErrorText(task.error) }}</p>
