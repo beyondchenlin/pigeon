@@ -16,7 +16,8 @@ import subprocess
 import time
 
 NATIVE_HASH = '03841b518f9a1308de3af62ae2fddbf4b5c0b918fa4e4aa701c5771a720fd05f'
-FUTEX_WAITS = frozenset(('futex_wait_queue', 'futex_wait_queue_me'))
+FUTEX_WAITS = frozenset(('futex_wait_queue', 'futex_wait_queue_me', 'futex_do_wait', '__futex_wait'))
+PIPE_READ_WAITS = frozenset(('pipe_read', 'anon_pipe_read'))
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ class Proc:
         result = set()
         # Linux x86_64 read=0; Android arm64 read=63. No other syscall accepted.
         for t in (self.root / str(pid) / 'task').iterdir():
-            if (t / 'wchan').read_text().strip() != 'pipe_read':
+            if (t / 'wchan').read_text().strip() not in PIPE_READ_WAITS:
                 continue
             fields = (t / 'syscall').read_text().split()
             if len(fields) > 1 and fields[0] in ('0', '63'):

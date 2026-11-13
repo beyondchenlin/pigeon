@@ -7,6 +7,19 @@ from pathlib import Path
 import re
 import shlex
 
+EVIDENCE_BATCH = re.compile(r'/api/v1/evidence/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/chunks/([0-9]{1,7})')
+
+
+def evidence_batch_request(method, path, body):
+    if '/chunks/' not in path:
+        return False
+    match = EVIDENCE_BATCH.fullmatch(path)
+    if (method != 'GET' or body is not None or match is None
+            or int(match.group(2)) % (128 * 1024) != 0
+            or int(match.group(2)) >= 768 * 1024):
+        raise TransportError('invalid_evidence_batch')
+    return True
+
 
 class TransportError(Exception):
     def __init__(self, code):
@@ -55,6 +68,7 @@ def wait_duration(method, path, body):
 
 def call(domain, method, path, body=None):
     wait_s = wait_duration(method, path, body)
+    batched_evidence = evidence_batch_request(method, path, body)
     import grpc
     from lamda.client import Device
     config = mapping(domain)
@@ -65,7 +79,9 @@ def call(domain, method, path, body=None):
         config['python'], config['bridge'], payload])
     # Each wait owns its own authenticated connection. The caller schedules it
     # outside the control pool; these deadlines do not enlarge stop/query calls.
-    script_timeout = wait_s + 8 if wait_s is not None else (22 if prepare else 12)
+    # A batch performs at most four bounded three-second loopback reads. It does
+    # not initialize UI, acquire a screen lease, or share a stop/query connection.
+    script_timeout = wait_s + 8 if wait_s is not None else (22 if prepare else (18 if batched_evidence else 12))
     rpc_timeout = script_timeout + 3
 
     class Deadline(grpc.UnaryUnaryClientInterceptor):

@@ -1,9 +1,11 @@
 import base64
 import hashlib
+import json
 import tempfile
 import unittest
 import uuid
-from server.bk_evidence_store import Archive, collect, CHUNK, terminal_binding
+from unittest.mock import patch
+from server.bk_evidence_store import Archive, collect, CHUNK, MAX_IMAGE, terminal_binding
 
 
 class EvidenceTransferTests(unittest.TestCase):
@@ -148,5 +150,99 @@ class EvidenceTransferTests(unittest.TestCase):
         self.assertEqual(collect('phonea',self.store,self.call,lambda task:True,
             validate_meta=lambda meta:terminal_binding(snapshot,meta)),[self.meta['evidence_id']])
         self.assertFalse(self.store.path('phonea',self.meta['evidence_id']).exists())
+
+    def batch_call(self, domain, method, path, body=None):
+        if path == '/api/v1/evidence':
+            reply = self.call(domain, method, path, body)
+            return dict(reply, bridge={'evidence_chunk_batch_version': 1})
+        if '/chunks/' not in path:
+            return self.call(domain, method, path, body)
+        self.calls.append((method, path))
+        offset = int(path.rsplit('/', 1)[1])
+        chunks = []
+        for current in range(offset, min(len(self.image), offset + 4 * CHUNK), CHUNK):
+            chunks.append(dict(evidence_id=self.meta['evidence_id'], offset=current,
+                size=len(self.image), sha256=self.meta['sha256'],
+                data=base64.b64encode(self.image[current:current + CHUNK]).decode()))
+        return dict(http=200, body={'chunks': chunks})
+
+    def resize_image(self, size):
+        self.image = b'\xff\xd8' + b'x' * (size - 4) + b'\xff\xd9'
+        self.meta.update(size=size, sha256=hashlib.sha256(self.image).hexdigest())
+
+    def test_four_chunk_real_sample_size_uses_one_bounded_batch_then_durable_ack(self):
+        self.resize_image(414953)
+        original = self.batch_call
+        def call(domain, method, path, body=None):
+            if path.endswith('/ack'):
+                self.assertEqual(self.store.path(domain, self.meta['evidence_id']).read_bytes(), self.image)
+                self.assertIsNotNone(self.store.get(domain, self.meta['evidence_id']))
+            reply = original(domain, method, path, body)
+            self.assertLess(len(json.dumps(reply).encode()), 1024 * 1024)
+            return reply
+        self.assertEqual(collect('phonea', self.store, call, lambda task: True), [self.meta['evidence_id']])
+        self.assertEqual([path.rsplit('/', 2)[-2:] for _, path in self.calls[1:-1]], [['chunks', '0']])
+        self.assertEqual(len(self.calls), 3)
+
+    def test_maximum_image_uses_two_batches_and_keeps_full_integrity_checks(self):
+        self.resize_image(MAX_IMAGE)
+        collect('phonea', self.store, self.batch_call, lambda task: True)
+        reads = [path for method, path in self.calls if '/chunks/' in path]
+        self.assertEqual([int(path.rsplit('/', 1)[1]) for path in reads], [0, 4 * CHUNK])
+        self.assertEqual(self.store.path('phonea', self.meta['evidence_id']).read_bytes(), self.image)
+
+    def test_phone_manifest_cannot_claim_bridge_batch_capability(self):
+        def forged(domain, method, path, body=None):
+            reply = self.call(domain, method, path, body)
+            if path == '/api/v1/evidence':
+                reply['body'].update(evidence_chunk_batch_version=1, bridge={'evidence_chunk_batch_version': 1})
+            return reply
+        collect('phonea', self.store, forged, lambda task: True)
+        self.assertFalse(any('/chunks/' in path for _, path in self.calls))
+        self.assertEqual(sum('/chunk/' in path for _, path in self.calls), 2)
+
+    def test_corrupt_or_oversized_batch_is_not_archived_or_acknowledged(self):
+        mutations = [
+            lambda body: body['chunks'].append(dict(body['chunks'][0])),
+            lambda body: body['chunks'][1].update(offset=0),
+            lambda body: body['chunks'][1].update(evidence_id=str(uuid.uuid4())),
+            lambda body: body['chunks'][1].update(size=len(self.image) + 1),
+            lambda body: body['chunks'][1].update(sha256='0' * 64),
+            lambda body: body['chunks'][0].update(data=base64.b64encode(b'short').decode()),
+            lambda body: body.update(unbounded='x' * (1024 * 1024)),
+        ]
+        for mutate in mutations:
+            with self.subTest(mutation=mutations.index(mutate)):
+                self.calls.clear()
+                def corrupt(domain, method, path, body=None):
+                    reply = self.batch_call(domain, method, path, body)
+                    if '/chunks/' in path:
+                        mutate(reply['body'])
+                    return reply
+                with self.assertRaises(ValueError):
+                    collect('phonea', self.store, corrupt, lambda task: True)
+                self.assertIsNone(self.store.get('phonea', self.meta['evidence_id']))
+                self.assertFalse(any(path.endswith('/ack') for _, path in self.calls))
+
+    def test_batch_connection_and_disk_failures_never_ack(self):
+        def unavailable(domain, method, path, body=None):
+            if '/chunks/' in path:
+                raise ConnectionError('unavailable')
+            return self.batch_call(domain, method, path, body)
+        with self.assertRaises(ConnectionError):
+            collect('phonea', self.store, unavailable, lambda task: True)
+        self.assertIsNone(self.store.get('phonea', self.meta['evidence_id']))
+        with patch.object(self.store, 'put', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                collect('phonea', self.store, self.batch_call, lambda task: True)
+        self.assertFalse(any(path.endswith('/ack') for _, path in self.calls))
+
+    def test_batch_transfer_still_requires_original_terminal_provenance(self):
+        snapshot = self.terminal_meta()
+        snapshot['run_id'] = 'a-different-run'
+        with self.assertRaises(ValueError):
+            collect('phonea', self.store, self.batch_call, lambda task: True,
+                validate_meta=lambda meta: terminal_binding(snapshot, meta))
+        self.assertEqual(self.calls, [('GET', '/api/v1/evidence')])
 
 if __name__ == '__main__': unittest.main()

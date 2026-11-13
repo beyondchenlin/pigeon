@@ -14,7 +14,7 @@ spec.loader.exec_module(transport)
 
 
 class TransportTests(unittest.TestCase):
-    def invoke(self, method, path, warmup_error=False, body=None):
+    def invoke(self, method, path, warmup_error=False, body=None, response=None):
         events = []
         device = MagicMock()
         self.device = device
@@ -25,7 +25,7 @@ class TransportTests(unittest.TestCase):
         device.device_info.side_effect = info
         def execute(*args, **kwargs):
             events.append('bridge')
-            return SimpleNamespace(stdout=json.dumps({'http':200,'body':{}}).encode())
+            return SimpleNamespace(stdout=response if response is not None else json.dumps({'http':200,'body':{}}).encode())
         device.execute_script.side_effect = execute
         config = dict(python='/runtime/python3', library='/runtime/lib', bridge='/user/bridge.py', info='/phone/info.json', state_dir='/user/state')
         with patch('lamda.client.Device', return_value=device), patch('grpc.intercept_channel', side_effect=lambda channel, _: channel), \
@@ -68,3 +68,27 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaisesRegex(transport.TransportError, 'invalid_wait'):
                     transport.call('example', 'POST', path, body)
                 device.assert_not_called()
+
+    def test_evidence_batch_has_a_bounded_read_budget_without_ui_initialization(self):
+        path = '/api/v1/evidence/12345678-1234-1234-1234-123456789abc/chunks/0'
+        self.assertEqual(self.invoke('GET', path), ['bridge'])
+        self.assertEqual(self.device.execute_script.call_args.kwargs['timeout'], 18)
+        self.assertEqual(self.invoke('GET', path.replace('/chunks/', '/chunk/')), ['bridge'])
+        self.assertEqual(self.device.execute_script.call_args.kwargs['timeout'], 12)
+
+    def test_batch_rejects_writes_custom_operations_and_unbounded_offsets_before_connecting(self):
+        path = '/api/v1/evidence/12345678-1234-1234-1234-123456789abc/chunks/0'
+        for method, target, body in [('POST', path, None), ('GET', path, {}),
+                ('GET', path, {'method': 'POST', 'path': '/api/v1/tasks'}),
+                ('GET', path[:-1] + '1', None), ('GET', path[:-1] + str(768 * 1024), None),
+                ('GET', path.replace('/evidence/', '/tasks/'), None)]:
+            with self.subTest(method=method, path=target), patch('lamda.client.Device') as device:
+                with self.assertRaisesRegex(transport.TransportError, 'invalid_evidence_batch'):
+                    transport.call('example', method, target, body)
+                device.assert_not_called()
+
+    def test_batch_preserves_one_mebibyte_reply_limit_and_closes_channel(self):
+        path = '/api/v1/evidence/12345678-1234-1234-1234-123456789abc/chunks/0'
+        with self.assertRaisesRegex(transport.TransportError, 'invalid_response'):
+            self.invoke('GET', path, response=b'x' * (1024 * 1024 + 1))
+        self.device.channel.close.assert_called_once()

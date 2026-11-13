@@ -1,18 +1,46 @@
 """Automatic evidence sync, deliberately independent of terminal task polling."""
 import asyncio
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import os
+import threading
 import time
 from executor.models import session_scope, Device
 from server.service import BaseHttpService
 from .bk_ai_store import AiTask
 from .bk_ai_transport import call
-from .bk_evidence_store import Archive, collect, terminal_binding
+from .bk_evidence_store import Archive, collect, terminal_binding, DOMAIN, ID
 
 POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix='bk-evidence')
 INFLIGHT = set()
 NEXT = {}
 HEALTH = {}
+WAKEUPS = set()
+SEEN_TERMINALS = OrderedDict()
+SCHEDULE_LOCK = threading.Lock()
+MAX_TERMINAL_NOTIFICATIONS = 4096
+
+
+def notify_terminal(domain, task_id):
+    """Wake evidence sync once, only after the caller commits a true terminal receipt.
+
+    Receipt callbacks can run in worker threads. A wakeup arriving while an old
+    read is in flight survives that read's success or failure; it is consumed
+    only when poll actually schedules the next read. This never contacts a
+    phone, changes a task, or acknowledges evidence.
+    """
+    if (not isinstance(domain, str) or not DOMAIN.fullmatch(domain)
+            or not isinstance(task_id, str) or not ID.fullmatch(task_id)):
+        return False
+    key = (domain, task_id)
+    with SCHEDULE_LOCK:
+        if key in SEEN_TERMINALS:
+            return False
+        SEEN_TERMINALS[key] = None
+        while len(SEEN_TERMINALS) > MAX_TERMINAL_NOTIFICATIONS:
+            SEEN_TERMINALS.popitem(last=False)
+        WAKEUPS.add(domain)
+    return True
 
 
 def archive():
@@ -30,28 +58,41 @@ def sync(domain):
 
 
 async def perform(domain):
-    INFLIGHT.add(domain)
+    with SCHEDULE_LOCK:
+        INFLIGHT.add(domain)
+    delay = 60
     try:
         ids = await asyncio.get_running_loop().run_in_executor(POOL, sync, domain)
         HEALTH[domain] = dict(state='connected', last_sync=time.time(), received=len(ids))
-        NEXT[domain] = time.monotonic() + 15
+        delay = 15
     except Exception:
         # Never log native error strings or credentials. Retrying here only reads files and ACKs.
         HEALTH[domain] = dict(state='retry_pending', last_attempt=time.time())
-        NEXT[domain] = time.monotonic() + 60
     finally:
-        INFLIGHT.discard(domain)
+        with SCHEDULE_LOCK:
+            NEXT[domain] = 0 if domain in WAKEUPS else time.monotonic() + delay
+            INFLIGHT.discard(domain)
 
 
 async def poll():
     with session_scope() as s:
         domains = [r[0] for r in s.query(Device.domain).join(AiTask, Device.id == AiTask.device_id).filter(Device.state == 'online').distinct()]
     for domain in domains:
-        if len(INFLIGHT) >= 2:
-            break
-        if domain not in INFLIGHT and NEXT.get(domain, 0) <= time.monotonic():
+        with SCHEDULE_LOCK:
+            if len(INFLIGHT) >= 2:
+                break
+            due = domain in WAKEUPS or NEXT.get(domain, 0) <= time.monotonic()
+            if domain in INFLIGHT or not due:
+                continue
             INFLIGHT.add(domain)
+            WAKEUPS.discard(domain)
+        try:
             asyncio.create_task(perform(domain))
+        except BaseException:
+            with SCHEDULE_LOCK:
+                INFLIGHT.discard(domain)
+                WAKEUPS.add(domain)
+            raise
 
 
 class EvidenceHandler(BaseHttpService):

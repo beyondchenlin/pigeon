@@ -20,6 +20,11 @@ import hashlib
 
 TERMINAL = frozenset(('done', 'failed', 'cancelled'))
 DEFAULT_INFO = '/sdcard/Android/data/com.beyondchenlin.bk101/files/mcp-usb.json'
+EVIDENCE_CHUNK = 128 * 1024
+EVIDENCE_MAX_IMAGE = 768 * 1024
+EVIDENCE_BATCH_CHUNKS = 4
+EVIDENCE_MAX_REPLY = 1024 * 1024
+EVIDENCE_BATCH = re.compile(r'/api/v1/evidence/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/chunks/([0-9]{1,7})')
 
 
 def valid_info(info):
@@ -181,6 +186,59 @@ def prepare_unsecured(info):
         return False
 
 
+def evidence_batch(info, method, path, body):
+    """Read up to four existing chunks locally; never accept a caller operation list.
+
+    The loopback credential stays inside api(). No task or ACK operation is
+    permitted here, and no arbitration lock is held while image bytes are read.
+    The Android application's existing 128 KiB endpoint remains unchanged.
+    """
+    def failure(code, http=400):
+        return {'http': http, 'body': {'error': {'code': code}}}
+    match = EVIDENCE_BATCH.fullmatch(path)
+    if method != 'GET' or body is not None or match is None:
+        return failure('invalid_evidence_batch')
+    eid, offset = match.group(1), int(match.group(2))
+    if offset % EVIDENCE_CHUNK or offset >= EVIDENCE_MAX_IMAGE:
+        return failure('invalid_evidence_batch')
+    chunks, size, digest = [], None, None
+    started = time.monotonic()
+    for _ in range(EVIDENCE_BATCH_CHUNKS):
+        if time.monotonic() - started >= 14:
+            return failure('evidence_batch_deadline', 502)
+        reply = api(info, 'GET', '/api/v1/evidence/' + eid + '/chunk/' + str(offset))
+        if reply.get('http') != 200:
+            return failure('evidence_chunk_unavailable', 502)
+        item = reply.get('body')
+        try:
+            if (not isinstance(item, dict) or item.get('evidence_id') != eid
+                    or type(item.get('offset')) is not int or item['offset'] != offset
+                    or type(item.get('size')) is not int or not offset < item['size'] <= EVIDENCE_MAX_IMAGE
+                    or not isinstance(item.get('sha256'), str) or not re.fullmatch(r'[a-f0-9]{64}', item['sha256'])
+                    or not isinstance(item.get('data'), str)
+                    or len(item['data']) > ((EVIDENCE_CHUNK + 2) // 3) * 4):
+                raise ValueError()
+            if size is None:
+                size, digest = item['size'], item['sha256']
+            if item['size'] != size or item['sha256'] != digest:
+                raise ValueError()
+            raw = base64.b64decode(item['data'], validate=True)
+            if len(raw) != min(EVIDENCE_CHUNK, size - offset):
+                raise ValueError()
+        except (ValueError, TypeError):
+            return failure('invalid_evidence_chunk', 502)
+        # Project only protocol fields; arbitrary phone fields never become a
+        # generic response tunnel or advertise bridge capabilities.
+        chunks.append({key: item[key] for key in ('evidence_id', 'offset', 'size', 'sha256', 'data')})
+        offset += len(raw)
+        if offset == size:
+            break
+    result = {'http': 200, 'body': {'chunks': chunks}}
+    if len(json.dumps(result, separators=(',', ':')).encode()) > EVIDENCE_MAX_REPLY:
+        return failure('oversized_evidence_batch', 502)
+    return result
+
+
 def submission_signature(body):
     """Bind the reserved execution to every supplied semantic parameter."""
     return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=True,
@@ -208,6 +266,8 @@ def bridge(request):
     method, path, body = request['method'], request['path'], request.get('body')
     if not valid_info(info):
         return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
+    if '/chunks/' in path:
+        return evidence_batch(info, method, path, body)
     if method == 'POST' and re.fullmatch(r'/api/v1/tasks/[a-f0-9-]{36}/answer', path):
         return answer_once(root, info, path, body)
     if method == 'POST' and path == '/api/v1/tasks':
@@ -272,6 +332,10 @@ def bridge(request):
                     return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
                 reservation = lease_key(data)
     reply = api(info, method, path, body)
+    if method == 'GET' and path == '/api/v1/evidence' and reply.get('http') == 200:
+        # Authenticate through the normal phone API first. The capability is
+        # outside its body, so a phone-supplied manifest field cannot enable it.
+        reply = dict(reply, bridge={'evidence_chunk_batch_version': 1})
     task = reply.get('body', {})
     if requested and reservation is not None and isinstance(task, dict) and task.get('status') in TERMINAL:
         task_id = requested.group(1)

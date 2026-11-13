@@ -1,4 +1,6 @@
 import importlib.util
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -507,6 +509,101 @@ class PreparationTests(unittest.TestCase):
              patch.object(phone, 'api') as api:
             self.assertFalse(phone.prepare_unsecured('/sdcard/Android/data/com.beyondchenlin.bk101/files/mcp-usb.json'))
             api.assert_not_called()
+
+
+class EvidenceBatchTests(unittest.TestCase):
+    def setUp(self):
+        self.eid = str(uuid.uuid4())
+        self.image = b'\xff\xd8' + b'x' * (414953 - 4) + b'\xff\xd9'
+        self.digest = hashlib.sha256(self.image).hexdigest()
+        self.request = dict(method='GET', path='/api/v1/evidence/' + self.eid + '/chunks/0',
+            info=phone.DEFAULT_INFO.replace('bk101/', 'bk101.mcp/'), state_dir='/not-used')
+
+    def local_chunk(self, info, method, path, body=None):
+        self.assertEqual(info, self.request['info'])
+        self.assertEqual(method, 'GET')
+        self.assertIsNone(body)
+        self.assertTrue(path.startswith('/api/v1/evidence/' + self.eid + '/chunk/'))
+        offset = int(path.rsplit('/', 1)[1])
+        return {'http': 200, 'body': dict(evidence_id=self.eid, offset=offset,
+            size=len(self.image), sha256=self.digest,
+            data=base64.b64encode(self.image[offset:offset + phone.EVIDENCE_CHUNK]).decode(),
+            ignored_phone_field='must-not-leave-the-phone')}
+
+    def test_four_local_reads_share_one_bridge_request_without_state_lock_or_secret_export(self):
+        with patch.object(phone, 'api', side_effect=self.local_chunk) as api, patch.object(phone, 'state') as state:
+            reply = phone.bridge(self.request)
+        self.assertEqual(reply['http'], 200)
+        self.assertEqual(api.call_count, 4)
+        state.assert_not_called()
+        self.assertLess(len(json.dumps(reply).encode()), 1024 * 1024)
+        self.assertNotIn('must-not-leave-the-phone', json.dumps(reply))
+        self.assertNotIn('info', reply)
+        self.assertEqual(b''.join(base64.b64decode(c['data']) for c in reply['body']['chunks']), self.image)
+
+    def test_largest_image_is_limited_to_four_chunks_per_request(self):
+        self.image = b'\xff\xd8' + b'x' * (phone.EVIDENCE_MAX_IMAGE - 4) + b'\xff\xd9'
+        self.digest = hashlib.sha256(self.image).hexdigest()
+        with patch.object(phone, 'api', side_effect=self.local_chunk) as api:
+            first = phone.bridge(self.request)
+            self.assertEqual(api.call_count, 4)
+            second = phone.bridge(dict(self.request, path=self.request['path'][:-1] + str(4 * phone.EVIDENCE_CHUNK)))
+            self.assertEqual(api.call_count, 6)
+        self.assertEqual([len(r['body']['chunks']) for r in (first, second)], [4, 2])
+        self.assertTrue(all(len(json.dumps(r).encode()) < 1024 * 1024 for r in (first, second)))
+
+    def test_write_operation_injection_invalid_paths_and_offsets_do_not_reach_api(self):
+        variants = [dict(self.request, method='POST'), dict(self.request, body={}),
+            dict(self.request, body={'method': 'POST', 'path': '/api/v1/tasks'}),
+            dict(self.request, path=self.request['path'].replace('/evidence/', '/tasks/')),
+            dict(self.request, path=self.request['path'][:-1] + '1'),
+            dict(self.request, path=self.request['path'][:-1] + str(phone.EVIDENCE_MAX_IMAGE)),
+            dict(self.request, path=self.request['path'] + '?method=POST'),
+            dict(self.request, info='/another-app/access.json')]
+        with patch.object(phone, 'api') as api:
+            for request in variants:
+                with self.subTest(request=request):
+                    self.assertEqual(phone.bridge(request)['http'], 400)
+            api.assert_not_called()
+
+    def test_mixed_identity_digest_offset_or_oversized_chunk_fails_whole_batch(self):
+        mutations = [dict(evidence_id=str(uuid.uuid4())), dict(sha256='0' * 64),
+            dict(offset=0), dict(size=phone.EVIDENCE_MAX_IMAGE + 1), dict(data='A' * (phone.EVIDENCE_CHUNK * 2))]
+        for changes in mutations:
+            with self.subTest(changes=list(changes)):
+                def corrupt(info, method, path, body=None):
+                    reply = self.local_chunk(info, method, path, body)
+                    if reply['body']['offset']:
+                        reply['body'].update(changes)
+                    return reply
+                with patch.object(phone, 'api', side_effect=corrupt):
+                    reply = phone.bridge(self.request)
+                self.assertEqual(reply['http'], 502)
+                self.assertNotIn('chunks', reply['body'])
+
+    def test_loopback_failure_and_deadline_do_not_return_partial_success(self):
+        def unavailable(info, method, path, body=None):
+            if path.endswith('/0'):
+                return self.local_chunk(info, method, path, body)
+            return {'http': 502, 'body': {}}
+        with patch.object(phone, 'api', side_effect=unavailable) as api:
+            self.assertEqual(phone.bridge(self.request)['http'], 502)
+            self.assertEqual(api.call_count, 2)
+        with patch.object(phone, 'api', side_effect=self.local_chunk) as api, \
+             patch.object(phone.time, 'monotonic', side_effect=[0, 0, 14]):
+            reply = phone.bridge(self.request)
+            self.assertEqual(reply['body']['error']['code'], 'evidence_batch_deadline')
+            self.assertEqual(api.call_count, 1)
+
+    def test_capability_is_bridge_envelope_metadata_only_after_authenticated_list_success(self):
+        request = dict(self.request, path='/api/v1/evidence')
+        body = {'evidence': [], 'bridge': {'evidence_chunk_batch_version': 999}}
+        with patch.object(phone, 'api', return_value={'http': 200, 'body': body}):
+            reply = phone.bridge(request)
+        self.assertEqual(reply['bridge'], {'evidence_chunk_batch_version': 1})
+        self.assertIs(reply['body'], body)
+        with patch.object(phone, 'api', return_value={'http': 401, 'body': {'error': {'code': 'unauthorized'}}}):
+            self.assertNotIn('bridge', phone.bridge(request))
 
 
 if __name__ == '__main__':

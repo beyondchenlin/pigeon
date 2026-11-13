@@ -100,7 +100,7 @@ class AiApiTests(AsyncHTTPTestCase):
                 return dict(http=202, body={'accepted': True})
             return dict(http=200, body=self.remote[task_id])
         self.patches = [patch.object(api, 'session_scope', self.sessions), patch.object(api, 'mapping', return_value={}),
-                        patch.object(api, 'call', side_effect=call)]
+                        patch.object(api, 'call', side_effect=call), patch('server.bk_evidence.notify_terminal')]
         for p in self.patches:
             p.start()
         super().setUp()
@@ -473,6 +473,84 @@ class AiApiTests(AsyncHTTPTestCase):
         self.assertEqual(result['error'], 'unconfirmed_phone_terminal')
         with self.sessions() as s:
             self.assertIsNotNone(active(s, 1))
+
+    def test_terminal_evidence_wakes_once_after_receipt_commit(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        committed = []
+        original_sessions = self.sessions
+
+        @contextmanager
+        def tracked_sessions():
+            with original_sessions() as session:
+                yield session
+            committed.append(True)
+
+        observed = []
+
+        def notified(domain, received_task_id):
+            with original_sessions() as session:
+                observed.append((bool(committed), domain, received_task_id,
+                    session.get(AiTask, task_id).status))
+
+        terminal = dict(self.remote[task_id], status='done', revision=2,
+            sampled_at_ms=int(time.time() * 1000) + 1, execution_result=self.finished_result(True))
+        with patch.object(api, 'session_scope', tracked_sessions), \
+                patch('server.bk_evidence.notify_terminal', side_effect=notified) as wake:
+            api.apply_reply(task_id, {'http': 200, 'body': terminal}, source='event')
+            api.apply_reply(task_id, {'http': 200, 'body': terminal}, source='event')
+            wake.assert_called_once_with('phonea', task_id)
+        self.assertEqual(observed, [(True, 'phonea', task_id, 'done')])
+
+    def test_evidence_wake_failure_does_not_fail_confirmed_stop(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        with patch('server.bk_evidence.notify_terminal', side_effect=RuntimeError('injected wake failure')) as wake, \
+                self.assertLogs(level='ERROR'):
+            code, result = self.request({}, '/' + task_id + '/cancel')
+        self.assertEqual(code, 200)
+        self.assertEqual(result['data']['status'], 'cancelled')
+        self.assertTrue(result['data']['cancel_requested'])
+        wake.assert_called_once_with('phonea', task_id)
+        with self.sessions() as session:
+            receipt = session.get(AiTask, task_id)
+            self.assertEqual(receipt.status, 'cancelled')
+            self.assertTrue(receipt.cancel_requested)
+            self.assertIsNone(active(session, 1))
+
+    def test_evidence_wake_failure_does_not_fail_terminal_refresh(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        self.remote[task_id] = dict(self.remote[task_id], status='done', revision=2,
+            sampled_at_ms=int(time.time() * 1000) + 1, execution_result=self.finished_result(True))
+        with patch('server.bk_evidence.notify_terminal', side_effect=RuntimeError('injected wake failure')) as wake, \
+                self.assertLogs(level='ERROR'):
+            code, result = self.request(suffix='/' + task_id + '?refresh=1')
+        self.assertEqual(code, 200)
+        self.assertEqual(result['data']['status'], 'done')
+        self.assertFalse(result['data']['cancel_requested'])
+        wake.assert_called_once_with('phonea', task_id)
+
+    def test_failed_receipt_transaction_does_not_wake_evidence(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        original_sessions = self.sessions
+
+        @contextmanager
+        def rejected_transaction():
+            with original_sessions() as session:
+                yield session
+                raise RuntimeError('injected receipt commit failure')
+
+        terminal = dict(self.remote[task_id], status='done', revision=2,
+            sampled_at_ms=int(time.time() * 1000) + 1, execution_result=self.finished_result(True))
+        with patch.object(api, 'session_scope', rejected_transaction), \
+                patch('server.bk_evidence.notify_terminal') as wake:
+            with self.assertRaisesRegex(RuntimeError, 'injected receipt commit failure'):
+                api.apply_reply(task_id, {'http': 200, 'body': terminal}, source='event')
+            wake.assert_not_called()
+        with original_sessions() as session:
+            self.assertEqual(session.get(AiTask, task_id).status, 'running')
 
     def test_out_of_order_and_duplicate_event_cannot_regress_true_terminal(self):
         _, row = self.browse()

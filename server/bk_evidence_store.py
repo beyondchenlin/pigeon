@@ -12,6 +12,47 @@ ID = re.compile(r'[a-f0-9-]{36}')
 DOMAIN = re.compile(r'[a-z0-9]+')
 MAX_IMAGE = 768 * 1024
 CHUNK = 128 * 1024
+BATCH_CHUNKS = 4
+MAX_REPLY = 1024 * 1024
+
+
+def decode_chunk(body, meta, offset):
+    """Validate every legacy phone chunk, including chunks inside a bridge batch."""
+    import base64
+    if (not isinstance(body, dict) or body.get('evidence_id') != meta['evidence_id']
+            or type(body.get('offset')) is not int or body['offset'] != offset
+            or type(body.get('size')) is not int or body['size'] != meta['size']
+            or body.get('sha256') != meta['sha256']
+            or not isinstance(body.get('data'), str)
+            or len(body['data']) > ((CHUNK + 2) // 3) * 4):
+        raise ValueError('invalid_chunk')
+    raw = base64.b64decode(body['data'], validate=True)
+    if len(raw) != min(CHUNK, meta['size'] - offset):
+        raise ValueError('invalid_chunk_size')
+    return raw
+
+
+def image_chunks(domain, meta, call, batched):
+    data = bytearray()
+    while len(data) < meta['size']:
+        offset = len(data)
+        suffix = '/chunks/' if batched else '/chunk/'
+        reply = call(domain, 'GET', '/api/v1/evidence/' + meta['evidence_id'] + suffix + str(offset))
+        if reply.get('http') != 200:
+            raise ValueError('invalid_chunk')
+        if batched:
+            if len(json.dumps(reply, separators=(',', ':')).encode()) > MAX_REPLY:
+                raise ValueError('oversized_evidence_batch')
+            body = reply.get('body')
+            chunks = body.get('chunks') if isinstance(body, dict) else None
+            expected = min(BATCH_CHUNKS, (meta['size'] - offset + CHUNK - 1) // CHUNK)
+            if not isinstance(chunks, list) or len(chunks) != expected:
+                raise ValueError('invalid_evidence_batch')
+        else:
+            chunks = [reply.get('body')]
+        for chunk in chunks:
+            data.extend(decode_chunk(chunk, meta, len(data)))
+    return bytes(data)
 
 
 class Archive:
@@ -137,6 +178,10 @@ def collect(domain, archive, call, owns_task, limit=4, validate_meta=None):
     records = reply['body']['evidence']
     if not isinstance(records, list) or len(records) > 16:
         raise ValueError('invalid_manifest')
+    # This field is added to the authenticated bridge envelope, not copied from
+    # the phone's manifest body. Older bridges use the unchanged single-chunk API.
+    capability = reply.get('bridge', {}).get('evidence_chunk_batch_version') if isinstance(reply.get('bridge'), dict) else None
+    batched = type(capability) is int and capability == 1
     saved = []
     for meta in records[:limit]:
         eid, size = meta['evidence_id'], meta['size']
@@ -145,18 +190,8 @@ def collect(domain, archive, call, owns_task, limit=4, validate_meta=None):
             raise ValueError('unowned_or_invalid_evidence')
         if validate_meta is not None and not validate_meta(meta):
             continue
-        data = bytearray()
-        for offset in range(0, size, CHUNK):
-            import base64
-            chunk = call(domain, 'GET', '/api/v1/evidence/' + eid + '/chunk/' + str(offset))
-            b = chunk.get('body', {})
-            if chunk['http'] != 200 or b.get('evidence_id') != eid or b.get('offset') != offset or b.get('size') != size or b.get('sha256') != meta['sha256']:
-                raise ValueError('invalid_chunk')
-            raw = base64.b64decode(b['data'], validate=True)
-            if len(raw) != min(CHUNK, size-offset):
-                raise ValueError('invalid_chunk_size')
-            data.extend(raw)
-        archive.put(domain, meta, bytes(data))
+        data = image_chunks(domain, meta, call, batched)
+        archive.put(domain, meta, data)
         ack = call(domain, 'POST', '/api/v1/evidence/' + eid + '/ack', {'sha256':meta['sha256']})
         if ack['http'] != 200 or ack['body'].get('archived') is not True:
             raise ValueError('ack_unconfirmed')

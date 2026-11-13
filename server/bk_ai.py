@@ -30,6 +30,20 @@ KNOWN = frozenset(('starting', 'running', 'queued', 'paused', 'waiting_for_answe
 
 
 def apply_reply(task_id, reply, submitting=False, source='query'):
+    terminal = _apply_reply(task_id, reply, submitting=submitting, source=source)
+    if terminal is not None:
+        # Notify only after the receipt transaction has committed. An in-flight
+        # evidence sync may still hold the preceding running snapshot.
+        try:
+            from .bk_evidence import notify_terminal
+            notify_terminal(*terminal)
+        except Exception:
+            # Evidence scheduling must not turn a committed terminal receipt
+            # into a failed refresh/stop response. Periodic sync still retries.
+            logging.exception('Unable to wake terminal evidence sync for task %s', task_id)
+
+
+def _apply_reply(task_id, reply, submitting=False, source='query'):
     with session_scope() as s:
         row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
         if row.status in TERMINAL:
@@ -66,6 +80,8 @@ def apply_reply(task_id, reply, submitting=False, source='query'):
                             source_event_at_ms=body.get('event_at_ms'))
                 if source != 'event':
                     update_sync(row, next_progress_at=now + (row.execution or {}).get('progress_interval_s', 2))
+                if row.execution and body['status'] in TERMINAL:
+                    return s.get(Device, row.device_id).domain, task_id
                 return
         # Only a definite refusal before task execution frees the device.
         if submitting and reply['http'] in (400, 401, 403, 409, 422, 429):

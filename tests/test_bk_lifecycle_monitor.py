@@ -51,6 +51,39 @@ class LifecycleTests(unittest.TestCase):
     def test_matches_historical_pre_exec_pipe_and_stable_identity(self):
         self.assertEqual(self.proc.candidates(self.parent),[self.child])
 
+    def test_verified_old_and_new_kernel_wait_names_preserve_stall_detection(self):
+        for parent_wait in ('pipe_read', 'anon_pipe_read'):
+            for child_wait in ('futex_wait_queue', 'futex_wait_queue_me', 'futex_do_wait', '__futex_wait'):
+                with self.subTest(parent_wait=parent_wait, child_wait=child_wait):
+                    (self.root/'100/task/100/wchan').write_text(parent_wait)
+                    (self.root/'101/task/101/wchan').write_text(child_wait)
+                    self.assertEqual(self.proc.candidates(self.parent), [self.child])
+
+    def test_similar_but_unverified_wait_names_are_not_accepted(self):
+        (self.root/'100/task/100/wchan').write_text('anon_pipe_read')
+        for child_wait in ('futex_do_wait_extra', '__futex_do_wait', '__futex_wait_extra', '___futex_wait', 'do_futex', 'futex_wait', '0'):
+            with self.subTest(child_wait=child_wait):
+                (self.root/'101/task/101/wchan').write_text(child_wait)
+                self.assertEqual(self.proc.candidates(self.parent), [])
+        (self.root/'101/task/101/wchan').write_text('futex_do_wait')
+        for parent_wait in ('anon_pipe_read_extra', '__anon_pipe_read', 'pipe_read_v2', 'do_pipe_read', '0'):
+            with self.subTest(parent_wait=parent_wait):
+                (self.root/'100/task/100/wchan').write_text(parent_wait)
+                self.assertEqual(self.proc.candidates(self.parent), [])
+
+    def test_new_wait_names_do_not_relax_syscall_or_exec_error_pipe_requirements(self):
+        (self.root/'100/task/100/wchan').write_text('anon_pipe_read')
+        (self.root/'101/task/101/wchan').write_text('futex_do_wait')
+        syscall = self.root/'100/task/100/syscall'
+        syscall.write_text('1 0x86 0x1 0x2')
+        self.assertEqual(self.proc.candidates(self.parent), [])
+        syscall.write_text('0 0x86 0x1 0x2')
+        (self.root/'101/fdinfo/135').write_text('flags:\t1\n')
+        self.assertEqual(self.proc.candidates(self.parent), [])
+        (self.root/'101/fdinfo/135').write_text('flags:\t%o\n'%(os.O_WRONLY|os.O_CLOEXEC))
+        self.pipe(100, 135, 42, os.O_WRONLY|os.O_CLOEXEC)
+        self.assertEqual(self.proc.candidates(self.parent), [])
+
     def test_android_without_children_file_uses_verified_uid_and_ppid(self):
         (self.root/'100/task/100/children').unlink()
         self.assertEqual(self.proc.candidates(self.parent),[self.child])
