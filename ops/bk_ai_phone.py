@@ -22,6 +22,40 @@ TERMINAL = frozenset(('done', 'failed', 'cancelled'))
 DEFAULT_INFO = '/sdcard/Android/data/com.beyondchenlin.bk101/files/mcp-usb.json'
 
 
+def valid_info(info):
+    return isinstance(info, str) and re.fullmatch(
+        r'/sdcard/Android/data/com\.beyondchenlin\.bk101(?:\.mcp)?/files/mcp-usb\.json', info) is not None
+
+
+def lease_key(data):
+    return json.dumps({key: data[key] for key in ('ai', 'ai_info', 'ai_signature', 'ai_execution')
+                       if key in data}, sort_keys=True, separators=(',', ':'))
+
+
+def lease_info(data, supplied=None):
+    # Missing is the legacy format. A present but invalid binding fails closed.
+    if 'ai_info' in data:
+        target = data['ai_info']
+        if supplied is not None and supplied != target:
+            raise ValueError('task_package_conflict')
+    else:
+        target = DEFAULT_INFO if supplied is None else supplied
+    if not valid_info(target):
+        raise ValueError('invalid_task_package')
+    return target
+
+
+def release_ai(data):
+    data['ai'] = None
+    for key in ('ai_info', 'ai_signature', 'ai_execution', 'answer_attempts'):
+        data.pop(key, None)
+
+
+def has_manual(data, claim):
+    return any((value.get('id') if isinstance(value, dict) else value) == claim
+               for value in data['manual'])
+
+
 def process_identity(pid):
     try:
         return Path('/proc/%s/stat' % pid).read_text().rsplit(')', 1)[1].split()[19]
@@ -172,6 +206,8 @@ def terminal_receipt(reply, task_id, execution=None):
 def bridge(request):
     root, info = request['state_dir'], request['info']
     method, path, body = request['method'], request['path'], request.get('body')
+    if not valid_info(info):
+        return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
     if method == 'POST' and re.fullmatch(r'/api/v1/tasks/[a-f0-9-]{36}/answer', path):
         return answer_once(root, info, path, body)
     if method == 'POST' and path == '/api/v1/tasks':
@@ -187,6 +223,10 @@ def bridge(request):
             if not ready or data.get('manual') or (data.get('ai') and data['ai'] != task_id):
                 return {'http': 409, 'body': {'error': {'code': 'control_busy_or_guard_unavailable'}}}
             if data.get('ai') == task_id:
+                try:
+                    lease_info(data, info)
+                except ValueError:
+                    return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
                 # Older reservations remain queryable, but cannot safely accept
                 # a POST whose original semantic parameters were not recorded.
                 previous = data.get('ai_signature')
@@ -194,34 +234,50 @@ def bridge(request):
                     code = 'conflict' if previous else 'request_signature_unavailable'
                     return {'http': 409, 'body': {'error': {'code': code}}}
                 # Even an identical duplicate never repeats creation.
-                return api(info, 'GET', '/api/v1/tasks/' + task_id)
+                reply = api(info, 'GET', '/api/v1/tasks/' + task_id)
+                if terminal_receipt(reply, task_id, data.get('ai_execution')):
+                    release_ai(data)
+                return reply
             data['ai'] = task_id
+            data['ai_info'] = info
             data['ai_signature'] = signature
             data['ai_execution'] = body.get('execution')
             data['answer_attempts'] = {}
+            reservation = lease_key(data)
         # Persist the reservation before dispatch. Manual takeover sees this ID.
         with state(root) as data:
+            if lease_key(data) != reservation:
+                return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
             if data.get('manual'):
-                data['ai'] = None
+                release_ai(data)
                 return {'http': 409, 'body': {'error': {'code': 'manual_takeover'}}}
             if request.get('prepare_unsecured') is True and not prepare_unsecured(info):
                 # No POST has happened, so this is a definite refusal, not an
                 # ambiguous execution. A later deliberate request may try again.
-                data['ai'] = None
+                release_ai(data)
                 return {'http': 409, 'body': {'error': {'code': 'device_not_ready'}}}
             reply = api(info, method, path, body)
             terminal = terminal_receipt(reply, task_id, data.get('ai_execution'))
             if terminal or reply['http'] in (400, 401, 403, 409, 422, 429):
-                data['ai'] = None
+                release_ai(data)
             return reply
+    requested = re.fullmatch(r'/api/v1/tasks/([a-f0-9-]{36})(?:/(?:cancel|answer|wait))?', path)
+    reservation = None
+    if requested:
+        with state(root) as data:
+            if data.get('ai') == requested.group(1):
+                try:
+                    lease_info(data, info)
+                except ValueError:
+                    return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
+                reservation = lease_key(data)
     reply = api(info, method, path, body)
     task = reply.get('body', {})
-    requested = re.fullmatch(r'/api/v1/tasks/([a-f0-9-]{36})(?:/(?:cancel|answer|wait))?', path)
-    if requested and isinstance(task, dict) and task.get('status') in TERMINAL:
+    if requested and reservation is not None and isinstance(task, dict) and task.get('status') in TERMINAL:
         task_id = requested.group(1)
         with state(root) as data:
-            if data.get('ai') == task_id and terminal_receipt(reply, task_id, data.get('ai_execution')):
-                data['ai'] = None
+            if lease_key(data) == reservation and terminal_receipt(reply, task_id, data.get('ai_execution')):
+                release_ai(data)
     return reply
 
 
@@ -247,6 +303,11 @@ def answer_once(root, info, path, body):
     with state(root) as data:
         if data.get('ai') != task_id or data.get('manual') or process_identity(data.get('guard_pid')) != data.get('guard_identity') or not data.get('guard_identity'):
             return refused('control_busy_or_guard_unavailable')
+        try:
+            lease_info(data, info)
+        except ValueError:
+            return refused('conflict')
+        reservation = lease_key(data)
         attempts = data.setdefault('answer_attempts', {})
         if key in attempts or len(attempts) >= 20:
             return refused('answer_already_attempted')
@@ -256,6 +317,8 @@ def answer_once(root, info, path, body):
     with state(root) as data:
         if data.get('manual') or data.get('ai') != task_id:
             return refused('manual_takeover')
+        if lease_key(data) != reservation:
+            return refused('conflict')
         current = api(info, 'GET', '/api/v1/tasks/' + task_id)
         value = current.get('body', {})
         if current['http'] != 200 or value.get('task_id') != task_id or question_key(value) != key:
@@ -268,13 +331,19 @@ def activate_guard(root):
         data.update(guard_pid=os.getpid(), guard_identity=process_identity(os.getpid()), manual=[])
 
 
-def enter_manual(root, info=DEFAULT_INFO, socket_fd=None):
+def enter_manual(root, info=None, socket_fd=None):
     claim = str(uuid.uuid4())
     owner = dict(id=claim, **manual_owner(socket_fd)) if socket_fd is not None else claim
     with state(root) as data:
-        data['manual'].append(owner)
         task_id = data.get('ai')
         execution = data.get('ai_execution')
+        if task_id:
+            try:
+                info = lease_info(data, info)
+            except ValueError as error:
+                raise RuntimeError('Task package is unconfirmed; input blocked') from error
+        reservation = lease_key(data)
+        data['manual'].append(owner)
     if not task_id:
         return claim
     try:
@@ -285,11 +354,23 @@ def enter_manual(root, info=DEFAULT_INFO, socket_fd=None):
             task = reply.get('body', {})
             if terminal_receipt(reply, task_id, execution):
                 with state(root) as data:
-                    if data.get('ai') == task_id:
-                        data['ai'] = None
+                    if not has_manual(data, claim):
+                        raise RuntimeError('Manual claim changed; input blocked')
+                    if lease_key(data) == reservation:
+                        release_ai(data)
+                    elif data.get('ai') is not None:
+                        raise RuntimeError('Task changed; input blocked')
+                    # Another confirmed query can release this completed task
+                    # while our live manual claim still excludes a replacement.
                 return claim
-            if reply['http'] == 200:
-                api(info, 'POST', '/api/v1/tasks/' + task_id + '/cancel', {})
+            if reply['http'] == 200 and isinstance(task, dict) and task.get('task_id') == task_id:
+                with state(root) as data:
+                    if not has_manual(data, claim):
+                        raise RuntimeError('Manual claim changed; input blocked')
+                    if lease_key(data) == reservation:
+                        api(info, 'POST', '/api/v1/tasks/' + task_id + '/cancel', {})
+                    elif data.get('ai') is not None:
+                        raise RuntimeError('Task changed; input blocked')
             time.sleep(.2)
         raise RuntimeError('AI stop is unconfirmed; input blocked')
     except BaseException:

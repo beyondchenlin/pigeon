@@ -25,7 +25,7 @@ class PhoneArbitrationTests(unittest.TestCase):
         phone.activate_guard(self.root)
         self.task = str(uuid.uuid4())
         self.request = dict(method='POST', path='/api/v1/tasks', body={'request_id': self.task, 'goal': 'read only'},
-                            info='/unused', state_dir=self.root)
+                            info=phone.DEFAULT_INFO.replace('bk101/', 'bk101.mcp/'), state_dir=self.root)
 
     def test_unknown_submission_is_not_replayed(self):
         with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}) as api:
@@ -270,7 +270,142 @@ class PhoneArbitrationTests(unittest.TestCase):
             request = dict(self.request, prepare_unsecured=True)
             phone.bridge(request)
             phone.bridge(request)
-            prepare.assert_called_once_with('/unused')
+            prepare.assert_called_once_with(self.request['info'])
+
+    def test_manual_takeover_uses_durable_package_binding_after_lost_acceptance(self):
+        with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}):
+            phone.bridge(self.request)
+        with phone.state(self.root) as data:
+            self.assertEqual(data['ai_info'], self.request['info'])
+        replies = [
+            {'http': 200, 'body': {'task_id': self.task, 'status': 'running'}},
+            {'http': 202, 'body': {'accepted': True}},
+            {'http': 200, 'body': {'task_id': self.task, 'status': 'cancelled'}},
+        ]
+        with patch.object(phone, 'api', side_effect=replies) as api, patch.object(phone.time, 'sleep'):
+            claim = phone.enter_manual(self.root)
+        self.assertEqual([call.args[0] for call in api.call_args_list], [self.request['info']] * 3)
+        with phone.state(self.root) as data:
+            self.assertIsNone(data['ai'])
+            self.assertNotIn('ai_info', data)
+        phone.leave_manual(self.root, claim)
+
+    def test_duplicate_lookup_releases_only_confirmed_terminal_without_reexecution(self):
+        execution = {'version': 1, 'duration_s': 120}
+        request = dict(self.request, body=dict(self.request['body'], execution=execution))
+        terminal = {'task_id': self.task, 'status': 'cancelled', 'execution': execution}
+        actual = dict(terminal, execution_result={'execution_finished': True, 'finished_at_ms': 10})
+        replies = [{'http': 502, 'body': {}}, {'http': 200, 'body': terminal}, {'http': 200, 'body': actual}]
+        with patch.object(phone, 'api', side_effect=replies) as api:
+            phone.bridge(request)
+            phone.bridge(request)
+            with phone.state(self.root) as data:
+                self.assertEqual(data['ai'], self.task)
+            phone.bridge(request)
+        self.assertEqual([call.args[1] for call in api.call_args_list], ['POST', 'GET', 'GET'])
+        with phone.state(self.root) as data:
+            self.assertIsNone(data['ai'])
+            self.assertNotIn('ai_info', data)
+
+    def test_other_package_cannot_retry_query_cancel_wait_or_answer_active_task(self):
+        with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}):
+            phone.bridge(self.request)
+        methods = [('POST', '/api/v1/tasks', self.request['body']),
+                   ('GET', '/api/v1/tasks/' + self.task, None),
+                   ('POST', '/api/v1/tasks/' + self.task + '/cancel', {}),
+                   ('POST', '/api/v1/tasks/' + self.task + '/wait', {'after_revision': 0, 'timeout_ms': 1000}),
+                   ('POST', '/api/v1/tasks/' + self.task + '/answer',
+                    {'text': 'reply', 'question_key': '0' * 64, 'request_id': str(uuid.uuid4())})]
+        with patch.object(phone, 'api') as api:
+            for method, path, body in methods:
+                reply = phone.bridge(dict(self.request, method=method, path=path, body=body, info=phone.DEFAULT_INFO))
+                self.assertEqual(reply['http'], 409)
+                self.assertEqual(reply['body']['error']['code'], 'conflict')
+            with self.assertRaisesRegex(RuntimeError, 'unconfirmed'):
+                phone.enter_manual(self.root, info=phone.DEFAULT_INFO)
+            api.assert_not_called()
+        with phone.state(self.root) as data:
+            self.assertEqual(data['ai'], self.task)
+            self.assertEqual(data['manual'], [])
+
+    def test_invalid_new_or_persisted_package_is_never_used_or_rebound(self):
+        with patch.object(phone, 'api') as api:
+            self.assertEqual(phone.bridge(dict(self.request, info='/tmp/credential'))['http'], 400)
+            api.assert_not_called()
+        for invalid in (None, '/tmp/credential', self.request['info'] + '/..'):
+            with phone.state(self.root) as data:
+                data.update(ai=self.task, ai_info=invalid)
+            with patch.object(phone, 'api') as api:
+                with self.assertRaisesRegex(RuntimeError, 'unconfirmed'):
+                    phone.enter_manual(self.root)
+                reply = phone.bridge(dict(self.request, method='GET', path='/api/v1/tasks/' + self.task, body=None))
+                self.assertEqual(reply['http'], 409)
+                api.assert_not_called()
+            with phone.state(self.root) as data:
+                self.assertEqual(data['ai'], self.task)
+                self.assertEqual(data['manual'], [])
+
+    def test_manual_terminal_for_changed_binding_does_not_release_replacement(self):
+        with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}):
+            phone.bridge(self.request)
+        def changed(*args):
+            with phone.state(self.root) as data:
+                data['ai_info'] = phone.DEFAULT_INFO
+            return {'http': 200, 'body': {'task_id': self.task, 'status': 'cancelled'}}
+        with patch.object(phone, 'api', side_effect=changed):
+            with self.assertRaisesRegex(RuntimeError, 'Task changed'):
+                phone.enter_manual(self.root)
+        with phone.state(self.root) as data:
+            self.assertEqual(data['ai'], self.task)
+            self.assertEqual(data['ai_info'], phone.DEFAULT_INFO)
+            self.assertEqual(data['manual'], [])
+
+    def test_query_terminal_for_changed_binding_does_not_release_replacement(self):
+        with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}):
+            phone.bridge(self.request)
+        def changed(*args):
+            with phone.state(self.root) as data:
+                data['ai_execution'] = {'version': 1, 'duration_s': 120}
+            return {'http': 200, 'body': {'task_id': self.task, 'status': 'cancelled'}}
+        with patch.object(phone, 'api', side_effect=changed):
+            phone.bridge(dict(self.request, method='GET', path='/api/v1/tasks/' + self.task, body=None))
+        with phone.state(self.root) as data:
+            self.assertEqual(data['ai'], self.task)
+
+    def test_concurrent_confirmed_release_keeps_live_manual_takeover_valid(self):
+        with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}):
+            phone.bridge(self.request)
+        def already_released(*args):
+            with phone.state(self.root) as data:
+                phone.release_ai(data)
+            return {'http': 200, 'body': {'task_id': self.task, 'status': 'cancelled'}}
+        with patch.object(phone, 'api', side_effect=already_released):
+            claim = phone.enter_manual(self.root)
+        with phone.state(self.root) as data:
+            self.assertTrue(phone.has_manual(data, claim))
+            self.assertIsNone(data['ai'])
+        phone.leave_manual(self.root, claim)
+
+    def test_guard_restart_during_takeover_cannot_return_an_unowned_manual_claim(self):
+        with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}):
+            phone.bridge(self.request)
+        def restarted(*args):
+            phone.activate_guard(self.root)
+            return {'http': 200, 'body': {'task_id': self.task, 'status': 'cancelled'}}
+        with patch.object(phone, 'api', side_effect=restarted):
+            with self.assertRaisesRegex(RuntimeError, 'Manual claim changed'):
+                phone.enter_manual(self.root)
+        with phone.state(self.root) as data:
+            self.assertEqual(data['ai'], self.task)
+            self.assertEqual(data['manual'], [])
+
+    def test_legacy_manual_record_uses_original_default_without_rebinding(self):
+        with phone.state(self.root) as data:
+            data['ai'] = self.task
+        with patch.object(phone, 'api', return_value={'http': 200, 'body': {'task_id': self.task, 'status': 'cancelled'}}) as api:
+            claim = phone.enter_manual(self.root)
+        self.assertEqual(api.call_args.args[0], phone.DEFAULT_INFO)
+        phone.leave_manual(self.root, claim)
 
     def answer_request(self):
         with phone.state(self.root) as data:
