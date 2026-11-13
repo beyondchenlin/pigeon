@@ -229,7 +229,16 @@ try {
   await evaluate('[...'+failedArticle+'.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
   assert.ok(await evaluate(failedArticle+'.innerText.includes('+JSON.stringify(modelFailure)+')'));
   assert.ok(await evaluate(failedArticle+'.innerText.includes("actual_task_display_unavailable")'));
-  passed('missing model usage and unavailable execution display have Chinese explanations and preserved diagnostics');
+  await evaluate('[...'+failedArticle+'.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
+  failed.result.reason='budget_exhausted';failed.result.execution_result.reason='budget_exhausted';failed.updated_at=now()+1;
+  await refresh();await waitFor(textIncludes('模型用量已达到本次预算，任务无法继续执行。'));
+  assert.equal(await evaluate(failedArticle+'.querySelector(".border-l-2").textContent'),'模型用量已达到本次预算，任务无法继续执行。');
+  assert.equal(await evaluate(failedArticle+'.innerText.includes("budget_exhausted")'),false);
+  await evaluate('[...'+failedArticle+'.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
+  assert.ok(await evaluate(failedArticle+'.innerText.includes("budget_exhausted")'));
+  failed.result.reason='future_execution_reason';failed.updated_at=now()+2;
+  await refresh();await waitFor(failedArticle+'.querySelector(".border-l-2").textContent==="future_execution_reason"');
+  passed('known model, budget and screenshot failures have Chinese explanations; diagnostics and unknown reasons remain intact');
 
   await navigate('/ai/phonea');await waitFor(textIncludes('合成追问任务'));
   state.holdNextPost=true;

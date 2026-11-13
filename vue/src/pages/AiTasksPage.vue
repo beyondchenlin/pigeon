@@ -65,6 +65,7 @@ const taskErrorText = (error: string) => {
   delivery_unknown:'请求是否送达待核对，保留原任务编号继续查询。',
   supervision_expired:'服务器监督期限已到，已请求停止，等待手机确认。',
   model_usage_unreported:'模型未报告本次用量，无法核对预算。',
+  budget_exhausted:'模型用量已达到本次预算，任务无法继续执行。',
   actual_task_display_unavailable:'本次未取得可用于结束证据的实际执行画面。'
   } as Record<string,string>)[code] || error;
 };
