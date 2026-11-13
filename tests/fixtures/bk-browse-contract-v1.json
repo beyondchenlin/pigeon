@@ -1,0 +1,113 @@
+{
+  "synthetic": true,
+  "execution": {
+    "version": 1,
+    "kind": "browse",
+    "clock": "elapsed",
+    "duration_s": 7200,
+    "finish_timeout_s": 60,
+    "stop_timeout_s": 15,
+    "progress_interval_s": 600,
+    "event_latency_s": 30,
+    "budget": {
+      "max_tokens": 100000
+    },
+    "progress_requirements": {
+      "min_observations": 2,
+      "min_active_s": 1,
+      "max_stall_s": 10800
+    }
+  },
+  "snapshot": {
+    "task_id": "43afed71-e7de-497e-92ef-19ac7e265d8a",
+    "status": "done",
+    "execution": {
+      "version": 1,
+      "kind": "browse",
+      "clock": "elapsed",
+      "duration_s": 7200,
+      "finish_timeout_s": 60,
+      "stop_timeout_s": 15,
+      "progress_interval_s": 600,
+      "event_latency_s": 30,
+      "budget": {
+        "max_tokens": 100000
+      },
+      "progress_requirements": {
+        "min_observations": 2,
+        "min_active_s": 1,
+        "max_stall_s": 10800
+      }
+    },
+    "execution_result": {
+      "revision": 4,
+      "event_at_ms": 1794546000100,
+      "sampled_at_ms": 1794546000100,
+      "phase": "done",
+      "actual_started_at_ms": 1794538800000,
+      "finished_at_ms": 1794546000100,
+      "last_progress_at_ms": 1794538802000,
+      "elapsed_ms": 7200100,
+      "active_ms": 2000,
+      "waiting_ms": 0,
+      "paused_ms": 0,
+      "stalled_ms": 7198000,
+      "observations": 2,
+      "reason": "duration_elapsed",
+      "duration_reached": true,
+      "business_success": true,
+      "execution_finished": true,
+      "progress_met": true,
+      "usage": {
+        "reported_tokens": 0
+      },
+      "evidence": {
+        "evidence_id": "43afed71-e7de-497e-92ef-19ac7e265d8a",
+        "task_id": "43afed71-e7de-497e-92ef-19ac7e265d8a",
+        "run_id": "synthetic-run-1",
+        "display_id": 3,
+        "captured_at_ms": 1794546000000,
+        "frame_at_ns": 7200000000000,
+        "capture_timing": "terminal_before_release",
+        "late_capture": false,
+        "source": "bk_task_display",
+        "phase": "result",
+        "mime": "image/jpeg",
+        "size": 740,
+        "sha256": "148a9408e3dc115899bd07146a830bc6404d82cf81185c9f07bfb571bf805013",
+        "sync_state": "pending",
+        "state": "captured",
+        "android_id": "synthetic-android-id"
+      }
+    },
+    "revision": 4,
+    "event_at_ms": 1794546000100,
+    "sampled_at_ms": 1794546000100,
+    "conversation": "mcp-43afed71-e7de-497e-92ef-19ac7e265d8a",
+    "goal": "synthetic browsing",
+    "started_at_ms": 1794538800000,
+    "run_id": "synthetic-run-1",
+    "answer": "Browse duration elapsed; measured progress requirements met.",
+    "verified": true,
+    "answerable": false
+  },
+  "evidence": {
+    "evidence_id": "43afed71-e7de-497e-92ef-19ac7e265d8a",
+    "task_id": "43afed71-e7de-497e-92ef-19ac7e265d8a",
+    "run_id": "synthetic-run-1",
+    "display_id": 3,
+    "captured_at_ms": 1794546000000,
+    "frame_at_ns": 7200000000000,
+    "capture_timing": "terminal_before_release",
+    "late_capture": false,
+    "source": "bk_task_display",
+    "phase": "result",
+    "mime": "image/jpeg",
+    "size": 740,
+    "sha256": "148a9408e3dc115899bd07146a830bc6404d82cf81185c9f07bfb571bf805013",
+    "sync_state": "pending",
+    "state": "captured",
+    "android_id": "synthetic-android-id"
+  },
+  "image_base64": "/9j/4AAQSkZJRgABAgAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAgACADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDyaCx6cVqQWPTitKCx6cVpwWPTiveq4syy/HbambBY9OK04LHpxWlBY9OK04LHpxXmVcWfc5fjttTMgsenFacFj04rSgsenFacFj04rzKuLPxbL8dtqZsFj04rTgsenFaUFj04rUgsenFeZVxZ9zl+O21P/9k="
+}

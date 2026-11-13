@@ -7,12 +7,18 @@ import uuid
 from unittest.mock import patch
 import importlib.util
 import os
+import time
+import copy
+import asyncio
+import threading
+from pathlib import Path
 if importlib.util.find_spec('sqlalchemy') is None or 'POSTGRES_PASSWORD' not in os.environ:
     raise unittest.SkipTest('Run API integration tests in the existing PIGEON runtime')
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from tornado.testing import AsyncHTTPTestCase
+from tornado.testing import AsyncHTTPTestCase, gen_test
+from tornado.httpclient import HTTPRequest
 from tornado.web import Application
 from tornado.platform.asyncio import BaseAsyncIOLoop
 from executor.models import Device, Task
@@ -31,19 +37,23 @@ class PollStartupTests(unittest.TestCase):
         async def observe():
             seen.append(asyncio.get_running_loop())
             http.ioloop.stop()
+        async def observe_events():
+            pass
         def original_start(manager):
             asyncio.set_event_loop(uvloop.new_event_loop())
             manager.ioloop = IOLoop.current()
             manager.ioloop.call_later(3, manager.ioloop.stop)
             manager.ioloop.start()
         try:
-            with patch.object(api, 'poll', observe):
+            with patch.object(api, 'poll', observe), patch.object(api, 'event_poll', observe_events):
                 api.start_with_polling(http, original_start)
             self.assertEqual(seen, [http.ioloop.asyncio_loop])
             self.assertIs(BaseAsyncIOLoop.start, previous)
         finally:
             if hasattr(http, '_bk_ai_poll'):
                 http._bk_ai_poll.stop()
+            if hasattr(http, '_bk_ai_event_poll'):
+                http._bk_ai_event_poll.stop()
             if hasattr(http, 'ioloop'):
                 http.ioloop.close(all_fds=True)
             asyncio.set_event_loop(None)
@@ -66,15 +76,27 @@ class AiApiTests(AsyncHTTPTestCase):
         self.remote = {}
         def call(domain, method, path, body=None):
             self.calls.append((domain, method, path, body))
+            if path == '/api/v1/capabilities':
+                return dict(http=200, body=dict(execution_versions=[1], task_wait_revision=True, terminal_evidence=True))
             if method == 'POST' and path == '/api/v1/tasks':
                 self.remote[body['request_id']] = dict(task_id=body['request_id'], status='running', step=1)
+                if 'execution' in body:
+                    self.remote[body['request_id']].update(execution=body['execution'], revision=1,
+                        event_at_ms=int(time.time()*1000), sampled_at_ms=int(time.time()*1000))
                 return dict(http=201, body=self.remote[body['request_id']])
             task_id = path.split('/')[4]
+            if path.endswith('/wait'):
+                value = self.remote[task_id]
+                return dict(http=200, body=value) if value['revision'] > body['after_revision'] else dict(http=204, body={})
             if path.endswith('/answer'):
                 self.remote[task_id] = dict(task_id=task_id, status='running')
                 return dict(http=200, body=dict(task_id=task_id, accepted=True))
             if path.endswith('/cancel'):
+                previous = self.remote[task_id]
                 self.remote[task_id] = dict(task_id=task_id, status='cancelled')
+                if previous.get('execution'):
+                    self.remote[task_id] = dict(previous, status='cancelled', revision=previous['revision']+1,
+                        sampled_at_ms=int(time.time()*1000), execution_result=self.finished_result(False))
                 return dict(http=202, body={'accepted': True})
             return dict(http=200, body=self.remote[task_id])
         self.patches = [patch.object(api, 'session_scope', self.sessions), patch.object(api, 'mapping', return_value={}),
@@ -89,6 +111,8 @@ class AiApiTests(AsyncHTTPTestCase):
             p.stop()
         self.engine.dispose()
         api.INFLIGHT.clear()
+        api.CANCEL_INFLIGHT.clear()
+        api.EVENT_INFLIGHT.clear()
 
     def get_app(self):
         sessions = self.sessions
@@ -110,6 +134,27 @@ class AiApiTests(AsyncHTTPTestCase):
     def submit(self, **extra):
         body = dict(goal='Read system information only', request_id=str(uuid.uuid4()), timeout_s=60, **extra)
         return body, self.request(body)
+
+    def test_long_budget_boundaries_and_unchanged_default(self):
+        for timeout in (15, 7200, 10800, None):
+            with self.subTest(timeout=timeout):
+                body = dict(goal='Read only', request_id=str(uuid.uuid4()))
+                if timeout is not None:
+                    body['timeout_s'] = timeout
+                code, result = self.request(body)
+                self.assertEqual(code, 202)
+                row = result['data']
+                self.assertEqual(round(row['deadline'] - row['created_at']), timeout or 900)
+                self.assertEqual(self.request(body)[1]['data']['task_id'], row['task_id'])
+                self.assertEqual(self.request({}, '/' + row['task_id'] + '/cancel')[1]['data']['status'], 'cancelled')
+        self.assertEqual(sum(method == 'POST' and path == '/api/v1/tasks' for _, method, path, _ in self.calls), 4)
+
+    def test_invalid_long_budget_rejected_before_phone_contact(self):
+        for timeout in (14, 10801, True, 7200.0, '7200', None):
+            with self.subTest(timeout=timeout):
+                code, _ = self.request(dict(goal='Read only', request_id=str(uuid.uuid4()), timeout_s=timeout))
+                self.assertEqual(code, 400)
+        self.assertEqual(self.calls, [])
 
     def test_create_duplicate_conflict_and_result(self):
         body, (code, reply) = self.submit()
@@ -290,6 +335,205 @@ class AiApiTests(AsyncHTTPTestCase):
             row.status, row.cancel_requested = 'waiting_for_answer', True
         self.assertEqual(self.request(body, '/' + task_id + '/answer')[0], 409)
         self.assertFalse(any(c[2].endswith('/answer') for c in self.calls))
+
+    @staticmethod
+    def execution():
+        return dict(version=1, kind='browse', duration_s=7200, clock='elapsed',
+            finish_timeout_s=60, stop_timeout_s=30, progress_interval_s=600, event_latency_s=30,
+            budget={'max_tokens': 12000}, progress_requirements={
+                'min_observations': 2, 'min_active_s': 3600, 'max_stall_s': 120})
+
+    @staticmethod
+    def finished_result(success):
+        return dict(execution_finished=True, duration_reached=success, business_success=success,
+            finished_at_ms=int(time.time()*1000), reason='duration_reached' if success else 'user_stop',
+            evidence={'state':'missing', 'reason':'synthetic_test_no_image'})
+
+    def browse(self):
+        body = dict(goal='Browse without posting', request_id=str(uuid.uuid4()), execution=self.execution())
+        code, response = self.request(body)
+        self.assertEqual(code, 202)
+        return body, response['data']
+
+    def test_browse_contract_persisted_default_covers_two_hours_and_old_id_conflicts(self):
+        body, row = self.browse()
+        self.assertEqual(row['execution'], body['execution'])
+        self.assertEqual(round(row['deadline'] - row['created_at']), 7440)
+        self.assertEqual(self.calls[1][3]['execution'], body['execution'])
+        for path, value in [('duration_s', 7199), ('finish_timeout_s', 59), ('stop_timeout_s', 29),
+                            ('progress_interval_s', 599), ('event_latency_s', 29)]:
+            modified = copy.deepcopy(body)
+            modified['execution'][path] = value
+            self.assertEqual(self.request(modified)[0], 409)
+        for group, key, value in [('budget', 'max_tokens', 11999),
+                                  ('progress_requirements', 'min_observations', 3),
+                                  ('progress_requirements', 'min_active_s', 3599),
+                                  ('progress_requirements', 'max_stall_s', 119)]:
+            modified = copy.deepcopy(body)
+            modified['execution'][group][key] = value
+            self.assertEqual(self.request(modified)[0], 409)
+        self.assertEqual(self.request(body)[1]['data']['task_id'], row['task_id'])
+        self.assertEqual(sum(m == 'POST' and p == '/api/v1/tasks' for _,m,p,_ in self.calls), 1)
+
+    def test_invalid_browse_contract_and_short_supervision_never_contact_phone(self):
+        body = dict(goal='Browse', request_id=str(uuid.uuid4()), execution=self.execution())
+        for field, value in [('clock', 'active'), ('kind', 'publish'), ('duration_s', True),
+                              ('version', 2), ('budget', {'max_tokens':0}),
+                              ('progress_requirements', {'min_observations':1,'min_active_s':1,'max_stall_s':10})]:
+            invalid = copy.deepcopy(body)
+            invalid['execution'][field] = value
+            self.assertEqual(self.request(invalid)[0], 400)
+        self.assertEqual(self.request(dict(body, execution=None))[0], 400)
+        self.assertEqual(self.request(dict(body, execution={**body['execution'], 'extra':1}))[0], 400)
+        self.assertEqual(self.request(dict(body, timeout_s=7200))[0], 400)
+        self.assertEqual(self.calls, [])
+
+    def test_old_phone_capabilities_rejected_before_business_submission(self):
+        with patch.object(api, 'call', return_value={'http':404, 'body':{}}) as call:
+            _, row = self.browse()
+        self.assertEqual(row['status'], 'rejected')
+        self.assertEqual(row['error'], 'unsupported_execution_contract')
+        self.assertEqual([c.args[1:] for c in call.call_args_list], [('GET', '/api/v1/capabilities')])
+
+    def test_browse_first_receipt_lost_queries_same_identity_without_replay(self):
+        real_call = api.call.side_effect
+        def lost(domain, method, path, body=None):
+            reply = real_call(domain, method, path, body)
+            if method == 'POST' and path == '/api/v1/tasks':
+                raise api.TransportError('connection_unknown')
+            return reply
+        with patch.object(api, 'call', side_effect=lost):
+            body, row = self.browse()
+        self.assertEqual(row['status'], 'unknown')
+        task_id = row['task_id']
+        self.assertEqual(self.request(body)[1]['data']['task_id'], task_id)
+        refreshed = self.request(suffix='/' + task_id + '?refresh=1')[1]['data']
+        self.assertEqual(refreshed['status'], 'running')
+        self.assertEqual(sum(m == 'POST' and p == '/api/v1/tasks' for _,m,p,_ in self.calls), 1)
+
+    def test_browse_cache_does_not_poll_phone_and_manual_refresh_does(self):
+        _, row = self.browse()
+        count = len(self.calls)
+        self.assertEqual(self.request(suffix='/' + row['task_id'])[0], 200)
+        self.assertEqual(self.request(suffix='/' + row['task_id'] + '?refresh=0')[0], 200)
+        self.assertEqual(len(self.calls), count)
+        self.request(suffix='/' + row['task_id'] + '?refresh=1')
+        self.assertEqual(len(self.calls), count + 1)
+
+    def test_event_after_summary_arrives_without_waiting_for_next_progress_period(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        self.remote[task_id] = dict(self.remote[task_id], status='waiting_on_phone', revision=2,
+            event_at_ms=int(time.time()*1000), sampled_at_ms=int(time.time()*1000))
+        api.wait_event(task_id)
+        result = self.request(suffix='/' + task_id)[1]['data']
+        self.assertEqual(result['status'], 'waiting_on_phone')
+        self.assertEqual(self.calls[-1][1:3], ('POST', '/api/v1/tasks/' + task_id + '/wait'))
+        self.assertIsNotNone(result['source_event_at_ms'])
+        with self.sessions() as s:
+            self.assertGreater(s.get(AiTask, task_id).sync_meta['next_progress_at'], time.time() + 590)
+
+    def test_empty_event_wait_updates_contact_without_importing_ordinary_progress(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        self.remote[task_id] = dict(self.remote[task_id], step=50)
+        api.wait_event(task_id)
+        result = self.request(suffix='/' + task_id)[1]['data']
+        self.assertEqual(result['result']['step'], 1)
+        self.assertIsNotNone(result['last_contact_at'])
+
+    def test_stop_unconfirmed_keeps_device_reserved_and_independent_deadline_visible(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        with patch.object(api, 'call', side_effect=lambda d,m,p,b=None: {'http':202,'body':{'accepted':True}}
+                          if p.endswith('/cancel') else {'http':200,'body':self.remote[task_id]}):
+            code, response = self.request({}, '/' + task_id + '/cancel')
+        self.assertEqual(code, 202)
+        self.assertTrue(response['data']['cancel_requested'])
+        with self.sessions() as s:
+            self.assertIsNotNone(active(s, 1))
+            task = s.get(AiTask, task_id)
+            task.sync_meta = dict(task.sync_meta, cancel_requested_at=time.time()-31)
+        self.assertTrue(self.request(suffix='/' + task_id)[1]['data']['stop_confirmation_overdue'])
+        self.assertEqual(self.submit()[1][0], 409)
+        self.remote[task_id] = dict(self.remote[task_id], status='cancelled', revision=2,
+            sampled_at_ms=int(time.time()*1000), execution_result=self.finished_result(False))
+        api.apply_reply(task_id, {'http':200,'body':self.remote[task_id]})
+        with self.sessions() as s:
+            self.assertIsNone(active(s, 1))
+
+    def test_unfinished_or_unsuccessful_phone_terminal_cannot_release_device(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        bad = dict(self.remote[task_id], status='done', revision=2,
+            sampled_at_ms=int(time.time()*1000), execution_result=self.finished_result(False))
+        api.apply_reply(task_id, {'http':200,'body':bad})
+        result = self.request(suffix='/' + task_id)[1]['data']
+        self.assertEqual(result['status'], 'unknown')
+        self.assertEqual(result['error'], 'unconfirmed_phone_terminal')
+        with self.sessions() as s:
+            self.assertIsNotNone(active(s, 1))
+
+    def test_out_of_order_and_duplicate_event_cannot_regress_true_terminal(self):
+        _, row = self.browse()
+        task_id = row['task_id']
+        original = self.remote[task_id]
+        newer = dict(original, status='finishing', revision=3, sampled_at_ms=original['sampled_at_ms']+3)
+        api.apply_reply(task_id, {'http':200,'body':newer})
+        api.apply_reply(task_id, {'http':200,'body':original})
+        self.assertEqual(self.request(suffix='/' + task_id)[1]['data']['status'], 'finishing')
+        terminal = dict(newer, status='done', revision=4, sampled_at_ms=newer['sampled_at_ms']+1,
+                        execution_result=self.finished_result(True))
+        api.apply_reply(task_id, {'http':200,'body':terminal})
+        api.apply_reply(task_id, {'http':200,'body':original})
+        api.apply_reply(task_id, {'http':200,'body':terminal})
+        self.assertEqual(self.request(suffix='/' + task_id)[1]['data']['status'], 'done')
+
+    def test_stop_workers_remain_available_when_all_event_workers_are_held(self):
+        _, row = self.browse()
+        release = threading.Event()
+        entered = [threading.Event() for _ in range(4)]
+        def hold(index):
+            entered[index].set()
+            release.wait(5)
+        futures = [api.EVENT_POOL.submit(hold, i) for i in range(4)]
+        try:
+            self.assertTrue(all(event.wait(2) for event in entered))
+            code, response = self.request({}, '/' + row['task_id'] + '/cancel')
+            self.assertEqual(code, 200)
+            self.assertEqual(response['data']['status'], 'cancelled')
+        finally:
+            release.set()
+            for future in futures:
+                future.result(timeout=2)
+
+    def test_actual_phone_serializer_terminal_is_accepted_and_preserved(self):
+        fixture = json.loads((Path(__file__).parent / 'fixtures' / 'bk-browse-contract-v1.json').read_text())
+        snapshot = fixture['snapshot']
+        now = time.time()
+        with self.sessions() as s:
+            s.add(AiTask(id=snapshot['task_id'], device_id=1, user_id=1,
+                request_id=str(uuid.uuid4()), goal=snapshot['goal'], status='running',
+                created=now, updated=now, deadline=now+10800, history=[], snapshot={},
+                execution=fixture['execution'], sync_meta={'admitted':True}))
+        api.apply_reply(snapshot['task_id'], {'http':200,'body':snapshot}, source='event')
+        result = self.request(suffix='/' + snapshot['task_id'])[1]['data']
+        self.assertEqual(result['status'], 'done')
+        self.assertEqual(result['result'],snapshot)
+        self.assertEqual(result['source_event_at_ms'],snapshot['event_at_ms'])
+        with self.sessions() as s:
+            self.assertIsNone(active(s,1))
+
+    @gen_test
+    async def test_concurrent_same_submission_creates_only_one_phone_execution(self):
+        body = dict(goal='Browse', request_id=str(uuid.uuid4()), execution=self.execution())
+        def request():
+            return HTTPRequest(self.get_url('/api/v1/device/phonea/ai/tasks'), method='POST',
+                headers={'X-Test-Auth':'owner'}, body=json.dumps(body))
+        responses = await asyncio.gather(self.http_client.fetch(request()), self.http_client.fetch(request()))
+        rows = [json.loads(response.body)['data'] for response in responses]
+        self.assertEqual(rows[0]['task_id'], rows[1]['task_id'])
+        self.assertEqual(sum(m == 'POST' and p == '/api/v1/tasks' for _,m,p,_ in self.calls), 1)
 
 
 if __name__ == '__main__':

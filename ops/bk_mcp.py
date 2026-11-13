@@ -16,6 +16,11 @@ from typing import Any
 from mcp.server.mcpserver.exceptions import ToolError
 
 
+DEFAULT_TIMEOUT_S = 900
+MIN_TIMEOUT_S = 15
+MAX_TIMEOUT_S = 10800  # Keep aligned with the task API; this is a supervision budget.
+
+
 class ApiClient:
     def __init__(self, config):
         self.base = config['base_url'].rstrip('/')
@@ -33,7 +38,7 @@ class ApiClient:
                 return None
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
-    def tasks(self, device_id, task_id=None, action=None, body=None):
+    def tasks(self, device_id, task_id=None, action=None, body=None, refresh=False):
         if device_id not in self.devices:
             raise ToolError('Device is outside this MCP connection scope')
         path = '/api/v1/device/' + device_id + '/ai/tasks'
@@ -44,6 +49,10 @@ class ApiClient:
             if action not in ('cancel', 'takeover', 'answer') or task_id is None:
                 raise ToolError('Unsupported task action')
             path += '/' + action
+        if refresh:
+            if task_id is None or action is not None or body is not None:
+                raise ToolError('Refresh is only supported for an existing task query')
+            path += '?refresh=1'
         return self.request(path, body)
 
     def evidence(self, device_id):
@@ -94,7 +103,9 @@ def create_server(api):
     server = MCPServer('PIGEON BK tasks', version='0.1.0', log_level='WARNING', instructions=(
         'Submit high-level goals; the phone executes its own agent loop. Save request_id before submission. '
         'The user only describes their goal: discover the authorized device, generate and persist the UUID yourself, '
-        'and use the default supervision limit. Do not ask the user for tool names, account IDs, UUIDs or timeout values. '
+        'and use the default supervision limit for legacy goals. For bounded browsing pass an explicitly configured '
+        'execution contract; timeout alone never defines business duration. Omit timeout_s to derive its supervision budget. '
+        'Do not ask the user for tool names, account IDs, UUIDs or timeout values. '
         'Pass the user goal unchanged; execution and business reply rules are built into the phone. '
         'On an unknown response query the same deterministic task ID; never create a replacement automatically. '
         'A done task is NOT proof of a published video. Check platform evidence separately. '
@@ -124,23 +135,38 @@ def create_server(api):
     @server.tool(annotations=read, structured_output=True)
     def get_task(device_id: str, task_id: str) -> dict[str, Any]:
         """Reconcile one existing task; done describes execution, not business verification."""
-        return api.tasks(device_id, task_id)
+        return api.tasks(device_id, task_id, refresh=True)
 
     @server.tool(annotations=write, structured_output=True)
-    def submit_task(device_id: str, goal: str, request_id: str, timeout_s: int = 900) -> dict[str, Any]:
+    def submit_task(device_id: str, goal: str, request_id: str, timeout_s: int | None = None,
+                    execution: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run a high-level goal on one phone. Persist a fresh UUID first; reuse it for identical requests only.
 
-        timeout_s is the current server supervision limit, not an offline phone deadline.
+        timeout_s is the optional 15..10800 second server supervision limit.
+        Legacy tasks default to 900. For a bounded browse task pass the complete
+        execution contract; the API validates it and derives supervision when
+        timeout_s is omitted. Do not substitute a long timeout for this contract.
+        The same request_id must retain every execution and budget parameter.
         No video publish policy or platform-specific verification is implied by this generic tool.
         """
         canonical_uuid(request_id)
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 4000:
             raise ToolError('goal must contain 1..4000 characters')
-        if type(timeout_s) is not int or not 15 <= timeout_s <= 1800:
-            raise ToolError('timeout_s must be an integer in 15..1800')
+        if timeout_s is not None and (type(timeout_s) is not int or not MIN_TIMEOUT_S <= timeout_s <= MAX_TIMEOUT_S):
+            raise ToolError(f'timeout_s must be an integer in {MIN_TIMEOUT_S}..{MAX_TIMEOUT_S}')
+        if execution is not None and (not isinstance(execution, dict) or not execution):
+            raise ToolError('execution must be a complete execution contract')
+        body = {'goal': goal, 'request_id': request_id}
+        if execution is not None:
+            # Forward every field. The shared API is authoritative; unsupported
+            # parameters must be rejected, never silently dropped by this adapter.
+            body['execution'] = execution
+        if timeout_s is not None:
+            body['timeout_s'] = timeout_s
+        elif execution is None:
+            body['timeout_s'] = DEFAULT_TIMEOUT_S
         task_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'pigeon-bk:' + device_id + ':' + request_id))
-        return {'task_id': task_id, 'request_id': request_id,
-            **api.tasks(device_id, body={'goal': goal, 'request_id': request_id, 'timeout_s': timeout_s})}
+        return {'task_id': task_id, 'request_id': request_id, **api.tasks(device_id, body=body)}
 
     @server.tool(annotations=write, structured_output=True)
     def answer_task(device_id: str, task_id: str, question_key: str, text: str, request_id: str) -> dict[str, Any]:

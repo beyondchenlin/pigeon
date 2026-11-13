@@ -7,7 +7,7 @@ from executor.models import session_scope, Device
 from server.service import BaseHttpService
 from .bk_ai_store import AiTask
 from .bk_ai_transport import call
-from .bk_evidence_store import Archive, collect
+from .bk_evidence_store import Archive, collect, terminal_binding
 
 POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix='bk-evidence')
 INFLIGHT = set()
@@ -21,8 +21,12 @@ def archive():
 
 def sync(domain):
     with session_scope() as s:
-        task_ids = {r[0] for r in s.query(AiTask.id).join(Device, Device.id == AiTask.device_id).filter(Device.domain == domain)}
-    return collect(domain, archive(), call, lambda task: task in task_ids)
+        tasks = {row.id: (bool(row.execution), row.snapshot) for row in s.query(AiTask)
+                 .join(Device, Device.id == AiTask.device_id).filter(Device.domain == domain)}
+    def validate(meta):
+        contracted, snapshot = tasks[meta['task_id']]
+        return terminal_binding(snapshot, meta) if contracted else True
+    return collect(domain, archive(), call, lambda task: task in tasks, validate_meta=validate)
 
 
 async def perform(domain):

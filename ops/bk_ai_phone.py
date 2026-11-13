@@ -1,8 +1,9 @@
 """Phone-local BK HTTP bridge and arbitration, run as Android shell.
 
 Only this process consumes the loopback credential. It never leaves the phone.
-The state file contains task IDs, not tokens or task content. Unknown execution
-retains the AI lease until a confirmed terminal receipt is available.
+The state file contains task IDs and the execution contract, never credentials
+or goal text. Unknown execution retains the AI lease until a confirmed terminal
+receipt is available.
 """
 from contextlib import contextmanager
 import base64
@@ -72,10 +73,25 @@ def state(root):
         os.replace(temp, path)
 
 
+def wait_duration(method, path, body):
+    if method != 'POST' or not re.fullmatch(r'/api/v1/tasks/[a-f0-9-]{36}/wait', path):
+        return None
+    if (not isinstance(body, dict) or set(body) != {'after_revision', 'timeout_ms'}
+            or type(body['after_revision']) is not int or not 0 <= body['after_revision'] <= 2**63 - 1
+            or type(body['timeout_ms']) is not int or not 1000 <= body['timeout_ms'] <= 20000):
+        raise ValueError('invalid_wait')
+    return body['timeout_ms'] / 1000
+
+
 def api(info, method, path, body=None):
+    try:
+        wait_s = wait_duration(method, path, body)
+    except ValueError:
+        return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
     task_path = method in ('GET', 'POST') and re.fullmatch(r'/api/v1(?:/device|/tasks(?:/[a-f0-9-]{36}(?:/(?:cancel|answer))?)?)?', path)
     evidence_path = (method == 'GET' and re.fullmatch(r'/api/v1/evidence(?:/[a-f0-9-]{36}/chunk/[0-9]{1,7})?', path)) or (method == 'POST' and re.fullmatch(r'/api/v1/evidence/[a-f0-9-]{36}/ack', path))
-    if not (task_path or evidence_path):
+    capabilities_path = method == 'GET' and path == '/api/v1/capabilities'
+    if not (task_path or evidence_path or wait_s is not None or capabilities_path):
         return {'http': 400, 'body': {'error': {'code': 'unsupported_operation'}}}
     try:
         with open(info) as f:
@@ -92,14 +108,16 @@ def api(info, method, path, body=None):
                 return None
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         try:
-            response = opener.open(req, timeout=3)
+            # Waiting uses a separate bridge process and never holds the state
+            # file lock, so cancellation and admission checks remain available.
+            response = opener.open(req, timeout=3 if wait_s is None else wait_s + 2)
         except urllib.error.HTTPError as e:
             response = e
         with response:
             raw = response.read(1024 * 1024 + 1)
             if len(raw) > 1024 * 1024:
                 raise ValueError()
-            return {'http': response.code, 'body': json.loads(raw)}
+            return {'http': response.code, 'body': {} if response.code == 204 else json.loads(raw)}
     except FileNotFoundError:
         return {'http': 409, 'body': {'error': {'code': 'phone_access_disabled'}}}
     except Exception:
@@ -114,8 +132,12 @@ def prepare_unsecured(info):
     A ready system state is required; a secure/remaining lock fails closed.
     """
     try:
+        match = re.fullmatch(r'/sdcard/Android/data/(com\.beyondchenlin\.bk101(?:\.mcp)?)/files/mcp-usb\.json', info)
+        if not match:
+            return False
+        component = match.group(1) + '/com.wangzan101.mika.ui.MainActivity'
         for args in (['input', 'keyevent', 'KEYCODE_WAKEUP'], ['wm', 'dismiss-keyguard'],
-                     ['am', 'start', '-n', 'com.beyondchenlin.bk101/com.wangzan101.mika.ui.MainActivity']):
+                     ['am', 'start', '-n', component]):
             subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3, check=True)
         reply = api(info, 'GET', '/api/v1/device')
         device = reply.get('body', {}).get('device', {})
@@ -125,6 +147,28 @@ def prepare_unsecured(info):
         return False
 
 
+def submission_signature(body):
+    """Bind the reserved execution to every supplied semantic parameter."""
+    return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=True,
+        separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+
+
+def terminal_receipt(reply, task_id, execution=None):
+    """A status label alone cannot release a contracted task's screen lease."""
+    body = reply.get('body')
+    if (reply.get('http') not in (200, 201) or not isinstance(body, dict)
+            or body.get('task_id') != task_id or body.get('status') not in TERMINAL):
+        return False
+    if execution is None:
+        return True  # Legacy tasks retain their established terminal protocol.
+    result = body.get('execution_result')
+    return (body.get('execution') == execution and isinstance(result, dict)
+            and result.get('execution_finished') is True
+            and type(result.get('finished_at_ms')) is int and result['finished_at_ms'] > 0
+            and (body['status'] != 'done' or (result.get('duration_reached') is True
+                                            and result.get('business_success') is True)))
+
+
 def bridge(request):
     root, info = request['state_dir'], request['info']
     method, path, body = request['method'], request['path'], request.get('body')
@@ -132,16 +176,28 @@ def bridge(request):
         return answer_once(root, info, path, body)
     if method == 'POST' and path == '/api/v1/tasks':
         task_id = body.get('request_id') if isinstance(body, dict) else None
-        if not isinstance(task_id, str) or str(uuid.UUID(task_id)) != task_id:
-            return {'http': 400, 'body': {'error': {'code': 'invalid_id'}}}
+        try:
+            if not isinstance(task_id, str) or str(uuid.UUID(task_id)) != task_id:
+                raise ValueError()
+            signature = submission_signature(body)
+        except (ValueError, TypeError, AttributeError):
+            return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
         with state(root) as data:
             ready = data.get('guard_identity') and process_identity(data.get('guard_pid')) == data['guard_identity']
             if not ready or data.get('manual') or (data.get('ai') and data['ai'] != task_id):
                 return {'http': 409, 'body': {'error': {'code': 'control_busy_or_guard_unavailable'}}}
             if data.get('ai') == task_id:
-                # Even a duplicate at the bridge never repeats creation.
+                # Older reservations remain queryable, but cannot safely accept
+                # a POST whose original semantic parameters were not recorded.
+                previous = data.get('ai_signature')
+                if not previous or previous != signature:
+                    code = 'conflict' if previous else 'request_signature_unavailable'
+                    return {'http': 409, 'body': {'error': {'code': code}}}
+                # Even an identical duplicate never repeats creation.
                 return api(info, 'GET', '/api/v1/tasks/' + task_id)
             data['ai'] = task_id
+            data['ai_signature'] = signature
+            data['ai_execution'] = body.get('execution')
             data['answer_attempts'] = {}
         # Persist the reservation before dispatch. Manual takeover sees this ID.
         with state(root) as data:
@@ -154,17 +210,17 @@ def bridge(request):
                 data['ai'] = None
                 return {'http': 409, 'body': {'error': {'code': 'device_not_ready'}}}
             reply = api(info, method, path, body)
-            receipt = reply.get('body', {})
-            terminal = (reply['http'] in (200, 201) and isinstance(receipt, dict)
-                        and receipt.get('task_id') == task_id and receipt.get('status') in TERMINAL)
+            terminal = terminal_receipt(reply, task_id, data.get('ai_execution'))
             if terminal or reply['http'] in (400, 401, 403, 409, 422, 429):
                 data['ai'] = None
             return reply
     reply = api(info, method, path, body)
     task = reply.get('body', {})
-    if reply['http'] == 200 and task.get('status') in TERMINAL:
+    requested = re.fullmatch(r'/api/v1/tasks/([a-f0-9-]{36})(?:/(?:cancel|answer|wait))?', path)
+    if requested and isinstance(task, dict) and task.get('status') in TERMINAL:
+        task_id = requested.group(1)
         with state(root) as data:
-            if data.get('ai') == task.get('task_id'):
+            if data.get('ai') == task_id and terminal_receipt(reply, task_id, data.get('ai_execution')):
                 data['ai'] = None
     return reply
 
@@ -218,6 +274,7 @@ def enter_manual(root, info=DEFAULT_INFO, socket_fd=None):
     with state(root) as data:
         data['manual'].append(owner)
         task_id = data.get('ai')
+        execution = data.get('ai_execution')
     if not task_id:
         return claim
     try:
@@ -226,7 +283,7 @@ def enter_manual(root, info=DEFAULT_INFO, socket_fd=None):
         while time.monotonic() < deadline:
             reply = api(info, 'GET', '/api/v1/tasks/' + task_id)
             task = reply.get('body', {})
-            if reply['http'] == 200 and task.get('task_id') == task_id and task.get('status') in TERMINAL:
+            if terminal_receipt(reply, task_id, execution):
                 with state(root) as data:
                     if data.get('ai') == task_id:
                         data['ai'] = None

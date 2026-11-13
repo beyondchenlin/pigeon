@@ -22,7 +22,8 @@ def refusal_code(reply):
     reason = error.get('code') if isinstance(error, dict) else None
     allowed = ('control_busy_or_guard_unavailable', 'manual_takeover',
                'device_not_ready', 'phone_access_disabled', 'conflict',
-               'invalid_argument', 'unauthorized', 'forbidden')
+               'invalid_argument', 'unauthorized', 'forbidden',
+               'unsupported_execution', 'request_signature_unavailable')
     return generic + ':' + reason if isinstance(reason, str) and reason in allowed else generic
 
 
@@ -41,7 +42,19 @@ def mapping(domain):
         raise TransportError('device_not_configured') from None
 
 
+def wait_duration(method, path, body):
+    if method != 'POST' or not re.fullmatch(r'/api/v1/tasks/[a-f0-9-]{36}/wait', path):
+        return None
+    if (not isinstance(body, dict) or set(body) != {'after_revision', 'timeout_ms'}
+            or type(body['after_revision']) is not int or not 0 <= body['after_revision'] <= 2**63 - 1
+            or type(body['timeout_ms']) is not int or not 1000 <= body['timeout_ms'] <= 20000):
+        raise TransportError('invalid_wait')
+    # FIRERPA's script timeout is a protobuf integer; round up subsecond waits.
+    return (body['timeout_ms'] + 999) // 1000
+
+
 def call(domain, method, path, body=None):
+    wait_s = wait_duration(method, path, body)
     import grpc
     from lamda.client import Device
     config = mapping(domain)
@@ -50,11 +63,15 @@ def call(domain, method, path, body=None):
         info=config['info'], state_dir=config['state_dir'], prepare_unsecured=prepare)).encode()).decode()
     command = 'export LD_LIBRARY_PATH=' + shlex.quote(config['library']) + '; ' + shlex.join([
         config['python'], config['bridge'], payload])
+    # Each wait owns its own authenticated connection. The caller schedules it
+    # outside the control pool; these deadlines do not enlarge stop/query calls.
+    script_timeout = wait_s + 8 if wait_s is not None else (22 if prepare else 12)
+    rpc_timeout = script_timeout + 3
 
     class Deadline(grpc.UnaryUnaryClientInterceptor):
         def intercept_unary_unary(self, continuation, details, request):
             Call = collections.namedtuple('Call', 'method timeout metadata credentials wait_for_ready compression')
-            return continuation(Call(details.method, 25 if prepare else 15, details.metadata, details.credentials, False, None), request)
+            return continuation(Call(details.method, rpc_timeout, details.metadata, details.credentials, False, None), request)
 
     device = Device('127.0.0.1', port=int(os.environ['API_PORT']),
                     certificate=str(Path('/user/certificates') / (domain + '.pem')))
@@ -65,7 +82,7 @@ def call(domain, method, path, body=None):
             # until its UI driver is initialized. This read initializes the
             # normal coexistence path; shell-only RPC does not initialize it.
             device.device_info()
-        reply = device.execute_script(command, timeout=22 if prepare else 12)
+        reply = device.execute_script(command, timeout=script_timeout)
         # stderr is deliberately never logged: native errors may contain secrets.
         if len(reply.stdout) > 1024 * 1024:
             raise TransportError('invalid_response')

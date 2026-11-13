@@ -3,7 +3,7 @@ import hashlib
 import tempfile
 import unittest
 import uuid
-from server.bk_evidence_store import Archive, collect, CHUNK
+from server.bk_evidence_store import Archive, collect, CHUNK, terminal_binding
 
 
 class EvidenceTransferTests(unittest.TestCase):
@@ -91,5 +91,62 @@ class EvidenceTransferTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.transfer()
         self.assertTrue(self.pending)
         with self.assertRaises(ValueError): self.store.path('../escape',self.meta['evidence_id'])
+
+    def terminal_meta(self):
+        self.meta.update(run_id='original-run', display_id=2, captured_at_ms=123456,
+            source='bk_task_display', capture_timing='terminal_before_release', late_capture=False,
+            android_id='synthetic-device')
+        expected = {key:self.meta[key] for key in ('evidence_id','task_id','run_id',
+                    'display_id','captured_at_ms','source')}
+        return {'task_id':self.meta['task_id'], 'run_id':'original-run', 'execution_result':{'evidence':dict(expected,state='captured'),
+            'execution_finished':True, 'actual_started_at_ms':123000, 'finished_at_ms':123999}}
+
+    def test_terminal_image_is_bound_to_task_run_display_and_capture_time(self):
+        snapshot = self.terminal_meta()
+        for field, value in [('task_id',str(uuid.uuid4())), ('run_id','later-run'),
+                             ('display_id',0), ('captured_at_ms',123457), ('source','later_capture')]:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                terminal_binding(snapshot,dict(self.meta, **{field:value}))
+        self.assertTrue(terminal_binding(snapshot,self.meta))
+        self.transfer()
+        self.assertEqual(self.store.get('phonea',self.meta['evidence_id'])['device_domain'],'phonea')
+
+    def test_late_or_unidentified_image_cannot_be_presented_as_terminal_capture(self):
+        snapshot = self.terminal_meta()
+        for field, value in [('capture_timing','later'),('late_capture',True),('android_id','')]:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                terminal_binding(snapshot,dict(self.meta, **{field:value}))
+
+    def test_matching_manifest_and_result_cannot_replace_the_actual_run(self):
+        snapshot = self.terminal_meta()
+        snapshot['run_id'] = 'actual-run'
+        with self.assertRaisesRegex(ValueError, 'invalid_terminal_evidence_provenance'):
+            collect('phonea',self.store,self.call,lambda task:True,
+                validate_meta=lambda meta:terminal_binding(snapshot,meta))
+        self.assertTrue(self.pending)
+        self.assertIsNone(self.store.get('phonea',self.meta['evidence_id']))
+
+    def test_image_waits_for_its_task_receipt_without_acknowledgement(self):
+        self.terminal_meta()
+        self.assertEqual(collect('phonea',self.store,self.call,lambda task:True,
+            validate_meta=lambda meta: terminal_binding({},meta)), [])
+        self.assertEqual(self.calls, [('GET','/api/v1/evidence')])
+        self.assertTrue(self.pending)
+
+    def test_capture_outside_execution_window_is_rejected_even_with_matching_manifest(self):
+        snapshot = self.terminal_meta()
+        for value in (122999, 124000):
+            self.meta['captured_at_ms'] = value
+            snapshot['execution_result']['evidence']['captured_at_ms'] = value
+            with self.assertRaises(ValueError): terminal_binding(snapshot,self.meta)
+
+    def test_explicit_missing_capture_is_archived_without_blocking_later_evidence(self):
+        snapshot = self.terminal_meta()
+        self.meta.update(state='missing',size=0,sha256='',reason='display_unavailable')
+        snapshot['execution_result']['evidence'].update(state='missing')
+        self.assertTrue(terminal_binding(snapshot,self.meta))
+        self.assertEqual(collect('phonea',self.store,self.call,lambda task:True,
+            validate_meta=lambda meta:terminal_binding(snapshot,meta)),[self.meta['evidence_id']])
+        self.assertFalse(self.store.path('phonea',self.meta['evidence_id']).exists())
 
 if __name__ == '__main__': unittest.main()

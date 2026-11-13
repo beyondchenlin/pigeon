@@ -1,0 +1,7 @@
+FROM python:3.11-slim@sha256:07d4824036af339fa1b6ef769cc99d9c10a141769538b52b3b597c84f7a7b535
+WORKDIR /verify
+COPY requirements.txt ./requirements.txt
+COPY driver-1.0.0-cp311-cp311-linux_x86_64.whl ./
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir ./driver-1.0.0-cp311-cp311-linux_x86_64.whl
+ENV PYTHONDONTWRITEBYTECODE=1 POSTGRES_PASSWORD=isolated REDIS_PASSWORD=isolated RABBITMQ_PASSWORD=isolated PYTHONPATH=/work
+WORKDIR /work

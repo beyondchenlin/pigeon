@@ -10,17 +10,26 @@ import hashlib
 from tornado.ioloop import PeriodicCallback
 from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device
-from .bk_ai_store import AiTask, AiAnswer, question_key, TERMINAL, active, locked_device, script_busy, change, describe, install_script_guard
+from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device,
+    script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel)
 from .bk_ai_transport import call, mapping, TransportError, refusal_code
 from .bk_maintenance import PUBLIC_ORIGIN
+from .bk_execution import (ContractError, validate_execution, supervision_timeout,
+    request_signature, supports_execution, DEFAULT_TIMEOUT_S, MIN_TIMEOUT_S, MAX_TIMEOUT_S)
 
 POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='bk-ai')
+# A held event wait can never consume the workers used to stop a phone.
+EVENT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='bk-ai-event')
+CONTROL_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix='bk-ai-control')
 INFLIGHT = set()
-KNOWN = frozenset(('starting', 'running', 'queued', 'paused', 'waiting_for_answer', 'waiting_on_phone', 'done', 'failed', 'cancelled'))
-DEFAULT_TIMEOUT_S = 900
+EVENT_INFLIGHT = set()
+CANCEL_INFLIGHT = set()
+KNOWN = frozenset(('starting', 'running', 'queued', 'paused', 'waiting_for_answer',
+    'waiting_on_phone', 'finishing', 'stopping', 'stop_unconfirmed', 'finish_overdue',
+    'done', 'failed', 'cancelled'))
 
 
-def apply_reply(task_id, reply, submitting=False):
+def apply_reply(task_id, reply, submitting=False, source='query'):
     with session_scope() as s:
         row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
         if row.status in TERMINAL:
@@ -31,7 +40,32 @@ def apply_reply(task_id, reply, submitting=False):
             return
         if reply['http'] == 200 or (submitting and reply['http'] == 201):
             if body.get('task_id') == task_id and body.get('status') in KNOWN:
+                if row.execution:
+                    revision, sampled = body.get('revision'), body.get('sampled_at_ms')
+                    if (body.get('execution') != row.execution or type(revision) is not int or revision < 0
+                            or type(sampled) is not int or sampled < 0):
+                        request_cancel(row, 'execution_response_mismatch')
+                        change(row, 'unknown', 'execution_response_mismatch')
+                        return
+                    old_revision = row.snapshot.get('revision', -1)
+                    old_sampled = row.snapshot.get('sampled_at_ms', -1)
+                    if revision < old_revision or (revision == old_revision and sampled < old_sampled):
+                        return
+                    if body['status'] in TERMINAL:
+                        result = body.get('execution_result')
+                        if (not isinstance(result, dict) or result.get('execution_finished') is not True
+                                or type(result.get('finished_at_ms')) is not int or result['finished_at_ms'] <= 0
+                                or (body['status'] == 'done' and (result.get('duration_reached') is not True
+                                    or result.get('business_success') is not True))):
+                            request_cancel(row, 'unconfirmed_phone_terminal')
+                            change(row, 'unknown', 'unconfirmed_phone_terminal')
+                            return
                 change(row, body['status'], snapshot=body)
+                now = time.time()
+                update_sync(row, phone_received_at=now, last_contact_at=now,
+                            source_event_at_ms=body.get('event_at_ms'))
+                if source != 'event':
+                    update_sync(row, next_progress_at=now + (row.execution or {}).get('progress_interval_s', 2))
                 return
         # Only a definite refusal before task execution frees the device.
         if submitting and reply['http'] in (400, 401, 403, 409, 422, 429):
@@ -40,33 +74,85 @@ def apply_reply(task_id, reply, submitting=False):
             change(row, 'unknown', 'phone_http_' + str(reply['http']))
 
 
-def reconcile(task_id, submit=False):
+def transport_failed(task_id, error, attempted_at):
     with session_scope() as s:
-        row = s.get(AiTask, task_id)
+        row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+        # A late failed request must not invalidate a newer successful reply.
+        if row.status not in TERMINAL and (row.sync_meta or {}).get('phone_received_at', 0) <= attempted_at:
+            change(row, 'unknown', error)
+
+
+def cancel_remote(task_id):
+    attempted_at = time.time()
+    with session_scope() as s:
+        row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+        if row.status in TERMINAL or not row.cancel_requested:
+            return
+        meta = row.sync_meta or {}
+        if meta.get('admitted') and not meta.get('dispatch_started_at'):
+            change(row, 'cancelled', snapshot={'task_id': task_id, 'status': 'cancelled',
+                'reason': 'cancelled_before_dispatch', 'source': 'server_receipt'})
+            return
+        domain = s.get(Device, row.device_id).domain
+        update_sync(row, next_cancel_at=attempted_at + 2)
+    try:
+        # Do not wait for an ordinary poll or a held event wait before cancellation.
+        call(domain, 'POST', '/api/v1/tasks/' + task_id + '/cancel', {})
+        apply_reply(task_id, call(domain, 'GET', '/api/v1/tasks/' + task_id))
+    except TransportError as e:
+        transport_failed(task_id, e.code, attempted_at)
+
+
+def reconcile(task_id, submit=False):
+    attempted_at = time.time()
+    with session_scope() as s:
+        row = s.query(AiTask).filter_by(id=task_id).with_for_update().one_or_none()
         if row is None or row.status in TERMINAL:
             return
         domain = s.get(Device, row.device_id).domain
-        goal = row.goal
-        cancel = row.cancel_requested or time.time() >= row.deadline
-        if cancel:
-            row.cancel_requested = True
+        goal, execution = row.goal, row.execution
+        if time.time() >= row.deadline:
+            request_cancel(row, 'supervision_expired')
+        update_sync(row, next_progress_at=attempted_at + (execution or {}).get('progress_interval_s', 2))
     try:
         if submit:
-            reply = call(domain, 'POST', '/api/v1/tasks', dict(goal=goal, request_id=task_id))
+            if execution:
+                capabilities = call(domain, 'GET', '/api/v1/capabilities')
+                if not supports_execution(capabilities):
+                    code = capabilities.get('http')
+                    reason = ('unsupported_execution_contract' if code in (200, 400, 404, 422)
+                              else 'capability_auth_refused' if code in (401, 403)
+                              else 'capability_check_unavailable')
+                    with session_scope() as s:
+                        row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+                        if row.status not in TERMINAL:
+                            change(row, 'rejected', reason)
+                    return
+            with session_scope() as s:
+                row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+                if row.status in TERMINAL or (row.sync_meta or {}).get('dispatch_started_at'):
+                    return
+                if row.cancel_requested:
+                    change(row, 'cancelled', snapshot={'task_id': task_id, 'status': 'cancelled',
+                        'reason': 'cancelled_before_dispatch', 'source': 'server_receipt'})
+                    return
+                update_sync(row, dispatch_started_at=time.time())
+            payload = dict(goal=goal, request_id=task_id)
+            if execution:
+                payload['execution'] = execution
+            reply = call(domain, 'POST', '/api/v1/tasks', payload)
             apply_reply(task_id, reply, submitting=True)
         else:
             reply = call(domain, 'GET', '/api/v1/tasks/' + task_id)
             apply_reply(task_id, reply)
-        body = reply.get('body', {})
-        if cancel and isinstance(body, dict) and body.get('status') in KNOWN - TERMINAL:
-            # Cancellation is state-based and safe to repeat until terminal, never creation.
-            call(domain, 'POST', '/api/v1/tasks/' + task_id + '/cancel', {})
-            apply_reply(task_id, call(domain, 'GET', '/api/v1/tasks/' + task_id))
-    except TransportError as e:
+        # Re-read intent: stop may have arrived while the query was in flight.
         with session_scope() as s:
-            row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
-            if row.status not in TERMINAL:
-                change(row, 'unknown', e.code)
+            row = s.get(AiTask, task_id)
+            cancel = row.cancel_requested and row.status not in TERMINAL
+        if cancel:
+            cancel_remote(task_id)
+    except TransportError as e:
+        transport_failed(task_id, e.code, attempted_at)
 
 
 async def perform(task_id, submit=False):
@@ -81,8 +167,92 @@ async def perform(task_id, submit=False):
 
 async def poll():
     with session_scope() as s:
-        ids = [r.id for r in s.query(AiTask).filter(AiTask.status.notin_(TERMINAL)).order_by(AiTask.updated).limit(4)]
+        now = time.time()
+        rows = s.query(AiTask).filter(AiTask.status.notin_(TERMINAL)).order_by(AiTask.updated)
+        ids = [r.id for r in rows if (not r.execution
+               or (r.sync_meta or {}).get('next_progress_at', 0) <= now)][:4]
     await asyncio.gather(*(perform(task_id) for task_id in ids))
+
+
+async def perform_cancel(task_id):
+    if task_id in CANCEL_INFLIGHT:
+        return
+    CANCEL_INFLIGHT.add(task_id)
+    try:
+        await asyncio.get_running_loop().run_in_executor(CONTROL_POOL, cancel_remote, task_id)
+    finally:
+        CANCEL_INFLIGHT.discard(task_id)
+
+
+def wait_event(task_id):
+    attempted_at = time.time()
+    with session_scope() as s:
+        row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+        if row.status in TERMINAL or not row.execution:
+            return
+        meta = row.sync_meta or {}
+        if meta.get('next_event_at', 0) > attempted_at:
+            return
+        domain = s.get(Device, row.device_id).domain
+        revision = row.snapshot.get('revision')
+        if row.status == 'unknown':
+            revision = None  # Reconnect reconciles the original receipt, never re-submits.
+        wait_ms = min(20000, max(1000, row.execution['event_latency_s'] * 1000))
+        retry_s = min(5, row.execution['event_latency_s'])
+        # Bounded persisted lease also prevents duplicate waiters across workers.
+        update_sync(row, next_event_at=attempted_at + wait_ms / 1000 + 12)
+    try:
+        if type(revision) is not int:
+            reply = call(domain, 'GET', '/api/v1/tasks/' + task_id)
+        else:
+            reply = call(domain, 'POST', '/api/v1/tasks/' + task_id + '/wait',
+                         {'after_revision': revision, 'timeout_ms': wait_ms})
+        if reply['http'] == 204:
+            with session_scope() as s:
+                row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+                update_sync(row, last_contact_at=time.time())
+        else:
+            apply_reply(task_id, reply, source='event')
+        backoff = 0 if reply['http'] in (200, 204) else retry_s
+    except TransportError as e:
+        transport_failed(task_id, e.code, attempted_at)
+        backoff = retry_s
+    finally:
+        with session_scope() as s:
+            row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+            update_sync(row, next_event_at=time.time() + locals().get('backoff', retry_s))
+
+
+async def perform_event(task_id):
+    try:
+        await asyncio.get_running_loop().run_in_executor(EVENT_POOL, wait_event, task_id)
+    finally:
+        EVENT_INFLIGHT.discard(task_id)
+
+
+async def event_poll():
+    """Critical events and stop intent run independently from summary polling."""
+    now = time.time()
+    with session_scope() as s:
+        rows = s.query(AiTask).filter(AiTask.status.notin_(TERMINAL)).order_by(AiTask.updated).with_for_update()
+        events, cancellations = [], []
+        for row in rows:
+            if now >= row.deadline:
+                request_cancel(row, 'supervision_expired')
+            meta = row.sync_meta or {}
+            if row.cancel_requested and meta.get('next_cancel_at', 0) <= now:
+                cancellations.append(row.id)
+            if row.execution and meta.get('next_event_at', 0) <= now:
+                events.append(row.id)
+    available = max(0, 2 - len(CANCEL_INFLIGHT))
+    for task_id in [value for value in cancellations if value not in CANCEL_INFLIGHT][:available]:
+        asyncio.create_task(perform_cancel(task_id))
+    for task_id in events:
+        if len(EVENT_INFLIGHT) >= 4:
+            break
+        if task_id not in EVENT_INFLIGHT:
+            EVENT_INFLIGHT.add(task_id)
+            asyncio.create_task(perform_event(task_id))
 
 
 def deliver_answer(domain, task_id, request_id, key, text):
@@ -141,8 +311,12 @@ class AiHandler(BaseHttpService):
         if action:
             self.throw(405, 'AI_METHOD', 'POST required')
         if task_id:
-            self.lookup(domain, task_id)
-            await perform(task_id)
+            current = self.lookup(domain, task_id)
+            refresh = self.get_query_argument('refresh', None)
+            if refresh not in (None, '0', '1'):
+                self.throw(400, 'AI_REFRESH', 'refresh must be 0 or 1')
+            if refresh == '1' or (refresh is None and not current.get('execution')):
+                await perform(task_id)
             self.tell(self.lookup(domain, task_id))
         else:
             with session_scope() as s:
@@ -162,24 +336,29 @@ class AiHandler(BaseHttpService):
             with session_scope() as s:
                 row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
                 if row.status not in TERMINAL:
-                    row.cancel_requested = True
-            await perform(task_id)
+                    request_cancel(row)
+            await perform_cancel(task_id)
             result = self.lookup(domain, task_id)
             self.set_status(200 if result['status'] in TERMINAL else 202)
             self.tell(result)
             return
-        if set(body) - {'goal', 'request_id', 'timeout_s'}:
+        if set(body) - {'goal', 'request_id', 'timeout_s', 'execution'}:
             self.throw(400, 'AI_FIELDS', 'Unsupported fields')
         goal, request_id = body.get('goal'), body.get('request_id')
-        timeout = body.get('timeout_s', DEFAULT_TIMEOUT_S)
+        try:
+            execution = validate_execution(body['execution']) if 'execution' in body else None
+        except ContractError as e:
+            self.throw(400, 'AI_EXECUTION', str(e))
+        try:
+            timeout = supervision_timeout(execution, body.get('timeout_s'), 'timeout_s' in body)
+        except ContractError as e:
+            self.throw(400, 'AI_TIMEOUT', str(e))
         try:
             valid_id = str(uuid.UUID(request_id)) == request_id
         except (ValueError, TypeError, AttributeError):
             valid_id = False
         if not valid_id or not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 4000:
             self.throw(400, 'AI_ARGUMENT', 'goal and a canonical UUID request_id are required')
-        if type(timeout) is not int or not 15 <= timeout <= 1800:
-            self.throw(400, 'AI_TIMEOUT', 'timeout_s must be an integer between 15 and 1800')
         goal = goal.strip()
         try:
             mapping(domain)
@@ -192,7 +371,7 @@ class AiHandler(BaseHttpService):
             if old:
                 if old.user_id != user.id:
                     self.throw(409, 'AI_REQUEST_REUSED', 'request_id is already in use')
-                if old.goal != goal or int(round(old.deadline - old.created)) != timeout:
+                if request_signature(old.goal, int(round(old.deadline - old.created)), old.execution) != request_signature(goal, timeout, execution):
                     self.throw(409, 'AI_REQUEST_REUSED', 'request_id already belongs to a different request')
                 self.tell(describe(old, s))
                 return
@@ -203,7 +382,8 @@ class AiHandler(BaseHttpService):
             now = time.time()
             row = AiTask(id=task_id, device_id=device.id, user_id=user.id, request_id=request_id,
                 goal=goal, status='submitting', created=now, updated=now, deadline=now + timeout,
-                history=[{'at': now, 'status': 'submitting', 'error': None}], snapshot={})
+                history=[{'at': now, 'status': 'submitting', 'error': None}], snapshot={},
+                execution=execution, sync_meta={'admitted': True})
             s.add(row)
         # Durable receipt precedes the only creation attempt. Restart only polls.
         await perform(task_id, submit=True)
@@ -260,6 +440,9 @@ def start_with_polling(http, original_start, **settings):
                 callback = PeriodicCallback(poll, 2000)
                 callback.start()
                 http._bk_ai_poll = callback
+                event_callback = PeriodicCallback(event_poll, 500)
+                event_callback.start()
+                http._bk_ai_event_poll = event_callback
                 from . import bk_evidence
                 evidence_callback = PeriodicCallback(bk_evidence.poll, 5000)
                 evidence_callback.start()
@@ -276,7 +459,7 @@ def start_with_polling(http, original_start, **settings):
 def install():
     if getattr(Service, '_bk_ai_installed', False):
         return
-    AiTask.__table__.create(engine, checkfirst=True)
+    ensure_schema(engine)
     AiAnswer.__table__.create(engine, checkfirst=True)
     install_script_guard()
     original = Service.__init__
