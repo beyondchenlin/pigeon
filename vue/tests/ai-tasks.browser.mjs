@@ -211,6 +211,26 @@ try {
   await clickText('关闭大图');
   passed('evidence page filters by original task and opens the archived image');
 
+  const failedId='00000000-0000-4000-8000-000000000005';
+  const modelFailure='模型调用异常:model_usage_unreported: cannot enforce execution token budget';
+  const failed={domain:'phonea',task_id:failedId,request_id:failedId,goal:'合成模型用量缺失任务',status:'failed',
+    created_at:now(),updated_at:now(),execution:browseRow.execution,
+    result:{run_id:'failed-run',reason:modelFailure,execution_result:{duration_reached:false,business_success:false,
+      execution_finished:true,elapsed_ms:11805,active_ms:0,observations:0,reason:'model_usage_unreported',
+      evidence:{state:'missing',reason:'actual_task_display_unavailable',display_id:-1}}}};
+  state.tasks=[failed,...state.tasks];
+  await navigate('/ai/phonea');await waitFor(textIncludes('模型未报告本次用量，无法核对预算。'));
+  const failedArticle='[...document.querySelectorAll("article")].find(x=>x.textContent.includes("合成模型用量缺失任务"))';
+  assert.ok(await evaluate(failedArticle+'.innerText.includes("本次未取得可用于结束证据的实际执行画面。")'));
+  assert.ok(await evaluate(failedArticle+'.innerText.includes("未完成")&&'+failedArticle+'.innerText.includes("完整浏览验收未通过")'));
+  assert.equal(await evaluate(failedArticle+'.innerText.includes("model_usage_unreported")'),false);
+  assert.equal(await evaluate(failedArticle+'.innerText.includes("actual_task_display_unavailable")'),false);
+  assert.equal(await evaluate(failedArticle+'.innerText.includes("登录失效")'),false);
+  await evaluate('[...'+failedArticle+'.querySelectorAll("summary")].find(x=>x.textContent==="诊断详情（原始记录）").click()');
+  assert.ok(await evaluate(failedArticle+'.innerText.includes('+JSON.stringify(modelFailure)+')'));
+  assert.ok(await evaluate(failedArticle+'.innerText.includes("actual_task_display_unavailable")'));
+  passed('missing model usage and unavailable execution display have Chinese explanations and preserved diagnostics');
+
   await navigate('/ai/phonea');await waitFor(textIncludes('合成追问任务'));
   state.holdNextPost=true;
   await fill('#task-goal','离开设备前下达的普通任务');await clickText('交给这台手机');

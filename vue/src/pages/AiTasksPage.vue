@@ -51,8 +51,11 @@ const usageText = (usage: unknown) => {
   return Object.entries(values).map(([key,value]) => (names[key] || key) + '：' + String(value)).join(' · ');
 };
 const reasonText = (reason?: string) => ({duration_elapsed:'业务期限已到',user_stopped:'用户停止',stalled:'超过允许停滞时间',
-  ended_early:'执行提前结束',budget_exhausted:'模型预算耗尽',finish_timeout:'到期收尾超时',model_usage_unreported:'模型未报告用量'} as Record<string,string>)[reason || ''] || reason || '尚未提供';
-const taskErrorText = (error: string) => ({
+  ended_early:'执行提前结束',budget_exhausted:'模型预算耗尽',finish_timeout:'到期收尾超时'} as Record<string,string>)[reason || ''] || taskErrorText(reason || '尚未提供');
+const taskErrorText = (error: string) => {
+  // The phone can prefix its budget failure with the surrounding model error.
+  const code = /^(?:模型调用异常:)?model_usage_unreported(?::|$)/.test(error) ? 'model_usage_unreported' : error;
+  return ({
   unsupported_execution_contract:'手机版本不支持本次执行约定，请核对候选包版本。',
   execution_response_mismatch:'手机返回的执行约定不一致，已请求停止并继续核对。',
   unconfirmed_phone_terminal:'手机终态证据不完整，仍保持占用并继续核对。',
@@ -60,8 +63,15 @@ const taskErrorText = (error: string) => ({
   capability_check_unavailable:'尚未取得手机能力信息，本次任务未派发。',
   connection_unknown:'连接状态待核对，保留原任务编号继续查询。',
   delivery_unknown:'请求是否送达待核对，保留原任务编号继续查询。',
-  supervision_expired:'服务器监督期限已到，已请求停止，等待手机确认。'
-} as Record<string,string>)[error] || error;
+  supervision_expired:'服务器监督期限已到，已请求停止，等待手机确认。',
+  model_usage_unreported:'模型未报告本次用量，无法核对预算。',
+  actual_task_display_unavailable:'本次未取得可用于结束证据的实际执行画面。'
+  } as Record<string,string>)[code] || error;
+};
+const taskDiagnostics = (task: Receipt) => [
+  ['任务错误', task.error], ['手机结束原因', task.result?.reason],
+  ['执行结束原因', task.result?.execution_result?.reason], ['截图缺失原因', task.result?.execution_result?.evidence?.reason]
+].filter(([, raw]) => raw && taskErrorText(raw) !== raw).map(([name, raw]) => name + '：' + raw).join('\n');
 const validEndEvidence = (task: Receipt) => {
   const evidence = task.result?.execution_result?.evidence;
   const result = task.result?.execution_result;
@@ -285,7 +295,7 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
           <p v-if="progressFor(task).step" class="whitespace-pre-wrap break-words">步骤：{{ progressFor(task).step }}</p>
           <p v-if="progressFor(task).stale">连接或执行状态仍在核对；以下结果可能是旧快照，不代表手机当前状态。</p>
         </div>
-        <p v-if="task.result?.answer || task.result?.reason || task.result?.message || task.result?.prompt" class="whitespace-pre-wrap break-words border-l-2 pl-3">{{ task.result?.answer || task.result?.reason || task.result?.message || task.result?.prompt }}</p>
+        <p v-if="task.result?.answer || task.result?.reason || task.result?.message || task.result?.prompt" class="whitespace-pre-wrap break-words border-l-2 pl-3">{{ task.result?.answer || (task.result?.reason ? taskErrorText(task.result.reason) : task.result?.message || task.result?.prompt) }}</p>
         <p v-if="task.stop_confirmation_overdue" class="text-sm text-amber-700">已超过停止确认目标，尚未确认手机停止；设备继续保持占用。</p>
         <p v-if="isStopping(task)" role="status" class="rounded border border-amber-500 p-3 text-sm">已请求停止，正在核对手机是否实际结束。本台手机仍被占用，确认终态后才能下达新任务。</p>
         <p v-if="task.error" class="text-sm text-amber-700">{{ taskErrorText(task.error) }}</p>
@@ -306,9 +316,10 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
             <p>设备：{{ domain }} · 任务：{{ task.task_id }} · 执行编号：{{ task.result?.execution_result?.evidence?.run_id }}</p>
             <p>执行显示：{{ task.result?.execution_result?.evidence?.display_id }} · 采集时间：{{ formatMillis(task.result?.execution_result?.evidence?.captured_at_ms) }} · 来源：{{ task.result?.execution_result?.evidence?.source === 'bk_task_display' ? '手机任务执行显示' : task.result?.execution_result?.evidence?.source }}</p>
           </div>
-          <p v-else-if="terminalTask(task.status)" class="text-amber-700">缺少已核实归属的真实结束截图，完整浏览验收未通过。{{ task.result?.execution_result?.evidence?.reason || '手机未提供完整的结束截图记录。' }}</p>
+          <p v-else-if="terminalTask(task.status)" class="text-amber-700">缺少已核实归属的真实结束截图，完整浏览验收未通过。{{ taskErrorText(task.result?.execution_result?.evidence?.reason || '手机未提供完整的结束截图记录。') }}</p>
           <p v-else class="text-muted-foreground">结束截图将在手机收尾时采集；尚未取得。</p>
         </section>
+        <details v-if="taskDiagnostics(task)" class="text-sm text-muted-foreground"><summary class="cursor-pointer">诊断详情（原始记录）</summary><pre class="whitespace-pre-wrap break-words">{{ taskDiagnostics(task) }}</pre></details>
         <p v-if="task.status === 'done'" class="text-sm text-muted-foreground">执行已结束；实际结果请结合归档截图和复查记录核验。</p>
         <form v-if="task.status === 'waiting_for_answer' && task.result?.answerable && task.question_key && !isStopping(task)" class="space-y-3 rounded border p-3" @submit.prevent="answer(task)">
           <p class="whitespace-pre-wrap break-words font-medium">{{ task.result.question }}</p>
