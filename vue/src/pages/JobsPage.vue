@@ -35,7 +35,7 @@ import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 type JobStatus = "running" | "paused" | "stopped";
-type JobMode = "loop" | "count" | "per-device-count" | "deadline" | "crontab";
+type JobMode = "loop" | "count" | "per-device-count" | "deadline" | "crontab" | "bk_managed";
 type JobSortField = "name" | "mode" | "priority" | "issued" | "success" | "failed" | "timeout" | "state" | "started" | "stopped";
 type SortOrder = "asc" | "desc";
 type StatusFilter = "all" | "running" | "paused" | "finished";
@@ -290,14 +290,14 @@ watch(
           const stoppedSec = normalizeTs(stoppedRaw);
           const stopped = stoppedSec > 0 ? stoppedSec : null;
           const rawState = String(item?.state || "");
-          const state: JobStatus = rawState === "paused"
+          const state: JobStatus = rawState === "paused" || rawState === "bk_paused"
             ? "paused"
-            : rawState === "stopped"
+            : rawState === "stopped" || rawState === "bk_stopped" || rawState === "bk_done"
             ? "stopped"
             : "running";
           const modeRaw = String(item?.mode || "loop") as JobMode;
           const mode: JobMode =
-            modeRaw === "count" || modeRaw === "per-device-count" || modeRaw === "deadline" || modeRaw === "crontab"
+            modeRaw === "count" || modeRaw === "per-device-count" || modeRaw === "deadline" || modeRaw === "crontab" || modeRaw === "bk_managed"
               ? modeRaw
               : "loop";
           return {
@@ -395,14 +395,15 @@ const onToggleJob = (jobId: number, checked: boolean) => {
 const onToggleSelectAllFiltered = (checked: boolean | "indeterminate") => {
   if (checked === "indeterminate") return;
   if (checked) {
-    selectedIds.value = new Set(paginated.value.map((j) => j.id));
+    selectedIds.value = new Set(paginated.value.filter((j) => j.mode !== 'bk_managed').map((j) => j.id));
   } else {
     selectedIds.value = new Set();
   }
 };
 
-const allFiltered = computed(() => paginated.value.every((j) => selectedIds.value.has(j.id)) && paginated.value.length > 0);
-const partialFiltered = computed(() => paginated.value.some((j) => selectedIds.value.has(j.id)) && !allFiltered.value);
+const selectable = computed(() => paginated.value.filter((j) => j.mode !== 'bk_managed'));
+const allFiltered = computed(() => selectable.value.every((j) => selectedIds.value.has(j.id)) && selectable.value.length > 0);
+const partialFiltered = computed(() => selectable.value.some((j) => selectedIds.value.has(j.id)) && !allFiltered.value);
 
 watch(
   () => selectedIds.value.size,
@@ -527,7 +528,9 @@ const statChips = computed(() => {
 });
 
 const modeText = (mode: JobMode): string =>
-  mode === "loop"
+  mode === "bk_managed"
+    ? 'BK 智能任务'
+    : mode === "loop"
     ? t.value.jobsPage.executeModeLoop
     : mode === "count"
     ? t.value.jobsPage.executeModeCount
@@ -571,6 +574,7 @@ const pageNumbers = computed(() =>
             <h1 class="text-base font-semibold text-gray-900">{{ t.jobsPage.title }}</h1>
           </div>
           <div class="flex items-center gap-2">
+            <a href="#/fleet-chat" class="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700">智能任务</a>
             <Button
               size="sm"
               class="h-8 gap-1.5 rounded-lg bg-gray-900 px-3.5 text-xs font-medium text-white hover:bg-gray-800"
@@ -743,11 +747,12 @@ const pageNumbers = computed(() =>
                     idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30',
                     selectedIds.has(job.id) && 'bg-gray-100/70'
                   )"
-                  @click="router.push(`/jobs/${job.id}`)"
+                  @click="router.push(job.mode === 'bk_managed' ? '/fleet-chat' : `/jobs/${job.id}`)"
                 >
                   <td class="px-3 py-2 w-10" @click.stop>
                     <Checkbox
                       :checked="selectedIds.has(job.id)"
+                      :disabled="job.mode === 'bk_managed'"
                       @update:checked="onToggleJob(job.id, $event === true)"
                       :aria-label="`Select job: ${job.name}`"
                     />

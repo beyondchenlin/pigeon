@@ -129,6 +129,21 @@ def install_script_guard():
         device = locked_device(session, dt.device_id)
         if device.controlling or active(session, device.id):
             return None
+        if dt.job.mode == 'deadline':
+            from sqlalchemy.orm.attributes import set_committed_value
+            from server.bk_job_timing import deadline_reached
+            if dt.job.state != 'running':
+                return None
+            if deadline_reached(dt.job.count, dt.job.start_time, time.time()):
+                return event.stop(session, dt.job, revoke=False)
+            # The compiled legacy scheduler reverses its timestamp comparison.
+            # Use its unchanged loop branch while retaining the real persisted
+            # deadline mode; no DB update or replacement of the worker is needed.
+            set_committed_value(dt.job, 'mode', 'loop')
+            try:
+                return original(session, dt)
+            finally:
+                set_committed_value(dt.job, 'mode', 'deadline')
         return original(session, dt)
 
     event.cb_task_status_prepared_imp = dispatch

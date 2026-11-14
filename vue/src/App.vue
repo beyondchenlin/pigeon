@@ -7,6 +7,7 @@ import DevicesPage from "@/pages/DevicesPage.vue";
 import DeviceWorkbench from "@/pages/DeviceWorkbench.vue";
 import EvidencePage from "@/pages/EvidencePage.vue";
 import AiTasksPage from "@/pages/AiTasksPage.vue";
+import FleetChatPage from "@/pages/FleetChatPage.vue";
 import PushPage from "@/pages/devices/PushPage.vue";
 import PullPage from "@/pages/devices/PullPage.vue";
 import BatchCommandPage from "@/pages/devices/BatchCommandPage.vue";
@@ -75,6 +76,7 @@ const rendered = computed(() => {
   if (/^\/control\/[^/]+$/.test(path)) return { component: DeviceWorkbench, key: path };
   if (/^\/evidence\/[a-z0-9]+$/.test(path)) return { component: EvidencePage, key: path };
   if (/^\/ai\/[a-z0-9]+$/.test(path)) return { component: AiTasksPage, key: path };
+  if (path === "/fleet-chat") return { component: FleetChatPage, key: path };
   if (path === "/devices/push") return { component: PushPage, key: path };
   if (path === "/devices/pull") return { component: PullPage, key: path };
   if (path === "/devices/batch-command") return { component: BatchCommandPage, key: path };

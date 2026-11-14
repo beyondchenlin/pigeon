@@ -54,6 +54,8 @@ class PollStartupTests(unittest.TestCase):
                 http._bk_ai_poll.stop()
             if hasattr(http, '_bk_ai_event_poll'):
                 http._bk_ai_event_poll.stop()
+            if hasattr(http, '_bk_fleet_poll'):
+                http._bk_fleet_poll.stop()
             if hasattr(http, 'ioloop'):
                 http.ioloop.close(all_fds=True)
             asyncio.set_event_loop(None)

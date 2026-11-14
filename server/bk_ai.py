@@ -9,7 +9,7 @@ import uuid
 import hashlib
 from tornado.ioloop import PeriodicCallback
 from server.service import BaseHttpService, Service
-from executor.models import session_scope, engine, Device
+from executor.models import session_scope, engine, Device, UserDevice
 from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device,
     script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel)
 from .bk_ai_transport import call, mapping, TransportError, refusal_code
@@ -119,6 +119,19 @@ def cancel_remote(task_id):
         transport_failed(task_id, e.code, attempted_at)
 
 
+def scheduled_admission_error(session, row):
+    if not (row.sync_meta or {}).get('job_id'):
+        return None
+    device = session.query(Device).filter_by(id=row.device_id).with_for_update().one()
+    ownership = (session.query(UserDevice.id).filter_by(user_id=row.user_id, device_id=row.device_id)
+                 .with_for_update().first())
+    if device.is_deleted or not ownership:
+        return 'access_revoked_before_dispatch'
+    if device.state != 'online':
+        return 'device_offline_before_dispatch'
+    return None
+
+
 def reconcile(task_id, submit=False):
     attempted_at = time.time()
     with session_scope() as s:
@@ -132,6 +145,22 @@ def reconcile(task_id, submit=False):
         update_sync(row, next_progress_at=attempted_at + (execution or {}).get('progress_interval_s', 2))
     try:
         if submit:
+            with session_scope() as s:
+                row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+                if row.status in TERMINAL:
+                    return
+                if (row.sync_meta or {}).get('dispatch_started_at'):
+                    return
+                if row.cancel_requested and not (row.sync_meta or {}).get('dispatch_started_at'):
+                    change(row, 'cancelled', snapshot={'task_id': task_id, 'status': 'cancelled',
+                        'reason': 'cancelled_before_dispatch', 'source': 'server_receipt'})
+                    return
+                if row.cancel_requested:
+                    return
+                admission_error = scheduled_admission_error(s, row)
+                if admission_error:
+                    change(row, 'rejected', admission_error)
+                    return
             if execution:
                 capabilities = call(domain, 'GET', '/api/v1/capabilities')
                 if not supports_execution(capabilities):
@@ -151,6 +180,10 @@ def reconcile(task_id, submit=False):
                 if row.cancel_requested:
                     change(row, 'cancelled', snapshot={'task_id': task_id, 'status': 'cancelled',
                         'reason': 'cancelled_before_dispatch', 'source': 'server_receipt'})
+                    return
+                admission_error = scheduled_admission_error(s, row)
+                if admission_error:
+                    change(row, 'rejected', admission_error)
                     return
                 update_sync(row, dispatch_started_at=time.time())
             payload = dict(goal=goal, request_id=task_id)
@@ -185,9 +218,13 @@ async def poll():
     with session_scope() as s:
         now = time.time()
         rows = s.query(AiTask).filter(AiTask.status.notin_(TERMINAL)).order_by(AiTask.updated)
-        ids = [r.id for r in rows if (not r.execution
+        ids = [(r.id, bool((r.sync_meta or {}).get('admitted')
+                           and not (r.sync_meta or {}).get('dispatch_started_at')))
+               for r in rows if (not r.execution
                or (r.sync_meta or {}).get('next_progress_at', 0) <= now)][:4]
-    await asyncio.gather(*(perform(task_id) for task_id in ids))
+    # An admitted receipt with no dispatch marker is safe to send once after a
+    # crash. Once the marker exists, only query the original phone receipt.
+    await asyncio.gather(*(perform(task_id, submit=submit) for task_id, submit in ids))
 
 
 async def perform_cancel(task_id):
@@ -463,6 +500,10 @@ def start_with_polling(http, original_start, **settings):
                 evidence_callback = PeriodicCallback(bk_evidence.poll, 5000)
                 evidence_callback.start()
                 http._bk_evidence_poll = evidence_callback
+                from . import bk_fleet
+                fleet_callback = PeriodicCallback(bk_fleet.poll, 2000)
+                fleet_callback.start()
+                http._bk_fleet_poll = fleet_callback
             loop.add_callback(begin)
         return original_run(loop)
     BaseAsyncIOLoop.start = run
@@ -477,6 +518,10 @@ def install():
         return
     ensure_schema(engine)
     AiAnswer.__table__.create(engine, checkfirst=True)
+    from .bk_fleet_store import FleetDraft
+    FleetDraft.__table__.create(engine, checkfirst=True)
+    from .bk_fleet import install_legacy_action_guards
+    install_legacy_action_guards()
     install_script_guard()
     original = Service.__init__
     def initialize(self, *args, **kwargs):
@@ -485,6 +530,16 @@ def install():
                               'server.bk_ai', handler='AiHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/evidence(?:/([a-f0-9-]{36})/image)?',
                               'server.bk_evidence', handler='EvidenceHandler')
+        self.http.add_handler(r'/api/v1/ai/plan/preview',
+                              'server.bk_fleet', handler='FleetPlanPreviewHandler')
+        self.http.add_handler(r'/api/v1/ai/chat/plan',
+                              'server.bk_fleet', handler='FleetChatPlanHandler')
+        self.http.add_handler(r'/api/v1/ai/chat/drafts/([a-f0-9-]{36})',
+                              'server.bk_fleet', handler='FleetDraftHandler')
+        self.http.add_handler(r'/api/v1/ai/models',
+                              'server.bk_fleet', handler='FleetModelListHandler')
+        self.http.add_handler(r'/api/v1/ai/jobs(?:/([0-9]+)(?:/(cancel))?)?',
+                              'server.bk_fleet', handler='FleetJobHandler')
     Service.__init__ = initialize
     original_start = __import__('server.service', fromlist=['HttpServiceManager']).HttpServiceManager.start_server
     def start(http, **settings):

@@ -1218,6 +1218,8 @@ class PlatformSpecificDeviceJobHandler(BaseHttpService):
         with session_scope() as session:
             user = self.get_login_user(session=session)
             _, job = self.get_login_user_job_owner(task, user=user, session=session)
+            if job.mode == 'bk_managed':
+                self.throw(409, 'BK_JOB_ACTION', 'Use the BK task controls for this job')
             job_id = job.id
         state = self.get_argument("state", default="", type=str).strip().lower()
         handler = getattr(self, f"_callback_{state}", self._callback_default)
@@ -1234,6 +1236,8 @@ class PlatformSpecificJobScriptVersionHandler(BaseHttpService):
         with session_scope() as session:
             user = self.get_login_user(session=session)
             _, job = self.get_login_user_job_owner(task, user=user, session=session)
+            if job.mode == 'bk_managed':
+                self.throw(409, 'BK_JOB_ACTION', 'Use the BK task controls for this job')
             if job.state == JobState.STOPPED.value:
                 self.throw(400, "J7005", message="Stopped job cannot switch script version")
             _, version = self.get_login_user_script_version(job.script.parent_id,
@@ -1497,6 +1501,8 @@ class PlatformSpecificJobTaskListHandler(BaseHttpService):
         with session_scope() as session:
             user = self.get_login_user(session=session)
             _, job = self.get_login_user_job_owner(task, user=user, session=session)
+            if job.mode == 'bk_managed':
+                self.throw(409, 'BK_JOB_ACTION', 'Use the BK task controls for this job')
             stop(session, job, with_running=with_running)
         self.tell(None, status=0)
 

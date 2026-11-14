@@ -763,7 +763,7 @@ const onSubmit = async () => {
     if (!ts || Number.isNaN(ts)) return showMiniTip(t.value.jobsPage.executeEndTimeRequired);
     if (diff <= 0) return showMiniTip(t.value.jobsPage.executeEndTimeAfterNow);
     if (diff < 120) return showMiniTip(t.value.jobsPage.executeEndTimeMinGap);
-    payloadCount = diff;
+    payloadCount = ts;
   } else if (form.value.mode === "crontab") {
     for (const item of CRON_PART_CONFIG) {
       const msg = validateCronPart(cronParts.value[item.key], item.key, item.min, item.max);

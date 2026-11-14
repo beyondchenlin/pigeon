@@ -748,7 +748,8 @@ def cb_task_status_prepared_imp(session, dt):
     funcs[JobMode.LOOP.value]  = lambda dt: (False, True)
     funcs[JobMode.COUNT.value] = lambda dt: (dt.job.issued >= dt.job.count, True)
     funcs[JobMode.PER_DEVICE_COUNT.value] = lambda dt: (session.query(DeviceJob.id).filter(DeviceJob.job_id==dt.job_id, DeviceJob.issued < dt.job.count).first() is None, dt.issued < dt.job.count)
-    funcs[JobMode.DEADLINE.value]  = lambda dt: (dt.job.count >= time.time(), True)
+    from server.bk_job_timing import deadline_reached
+    funcs[JobMode.DEADLINE.value]  = lambda dt: (deadline_reached(dt.job.count, dt.job.start_time, time.time()), True)
     funcs[JobMode.CRONTAB.value] = lambda dt: (False, True)
     finish, issue = funcs[dt.job.mode](dt)
     if finish == True:

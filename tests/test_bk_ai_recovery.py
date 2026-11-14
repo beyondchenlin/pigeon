@@ -11,14 +11,14 @@ if importlib.util.find_spec('sqlalchemy') is None or 'POSTGRES_PASSWORD' not in 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from executor.models import Device
+from executor.models import Device, UserDevice
 from server import bk_ai as api
 from server.bk_ai_store import AiTask
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread':False})
-        for table in (Device.__table__, AiTask.__table__): table.create(self.engine)
+        for table in (Device.__table__, UserDevice.__table__, AiTask.__table__): table.create(self.engine)
         factory = sessionmaker(self.engine, expire_on_commit=False)
         @contextmanager
         def sessions():
@@ -73,12 +73,46 @@ class RecoveryTests(unittest.TestCase):
     def test_poll_rotates_all_devices_instead_of_starving_after_four(self):
         ids=[self.receipt(n) for n in range(1,7)]
         seen=[]
-        async def perform(task_id):
+        async def perform(task_id, submit=False):
             seen.append(task_id)
             with self.sessions() as s:s.get(AiTask,task_id).updated=time.time()
         with patch.object(api,'perform',perform):
             asyncio.run(api.poll());asyncio.run(api.poll())
         self.assertEqual(set(seen),set(ids))
         self.assertEqual(seen[:4],ids[:4])
+
+    def test_restart_dispatches_only_receipts_without_dispatch_marker(self):
+        unsent, uncertain = self.receipt(1, status='submitting'), self.receipt(2, status='unknown')
+        with self.sessions() as s:
+            s.get(AiTask, unsent).sync_meta = {'admitted': True}
+            s.get(AiTask, uncertain).sync_meta = {'admitted': True, 'dispatch_started_at': 1}
+        seen = []
+        async def perform(task_id, submit=False):
+            seen.append((task_id, submit))
+        with patch.object(api, 'perform', perform):
+            asyncio.run(api.poll())
+        self.assertEqual(dict(seen), {unsent: True, uncertain: False})
+
+    def test_scheduled_task_is_not_sent_after_permission_revocation(self):
+        task_id = self.receipt(1, status='submitting')
+        with self.sessions() as s:
+            s.get(AiTask, task_id).sync_meta = {'admitted': True, 'job_id': 9}
+        with patch.object(api, 'call') as call:
+            api.reconcile(task_id, submit=True)
+            call.assert_not_called()
+        with self.sessions() as s:
+            self.assertEqual(s.get(AiTask, task_id).error, 'access_revoked_before_dispatch')
+
+    def test_scheduled_task_is_not_sent_when_device_goes_offline(self):
+        task_id = self.receipt(1, status='submitting')
+        with self.sessions() as s:
+            s.add(UserDevice(user_id=1, device_id=1))
+            s.get(Device, 1).state = 'offline'
+            s.get(AiTask, task_id).sync_meta = {'admitted': True, 'job_id': 9}
+        with patch.object(api, 'call') as call:
+            api.reconcile(task_id, submit=True)
+            call.assert_not_called()
+        with self.sessions() as s:
+            self.assertEqual(s.get(AiTask, task_id).error, 'device_offline_before_dispatch')
 
 if __name__=='__main__':unittest.main()
