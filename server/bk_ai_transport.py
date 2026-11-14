@@ -48,6 +48,12 @@ def mapping(domain):
         config = configurations.get(domain, configurations.get('_default'))
         if not isinstance(config, dict):
             raise ValueError('missing configuration')
+        if config.get('runtime_env') is True:
+            if set(config) - {'runtime_env', 'info', 'prepare_unsecured'} or config.get('info') != 'auto':
+                raise ValueError('invalid runtime configuration')
+            if type(config.get('prepare_unsecured', False)) is not bool:
+                raise ValueError('invalid preparation flag')
+            return config
         for key in ('python', 'bridge', 'info', 'state_dir', 'library'):
             value = config[key]
             if key == 'info' and value == 'auto':
@@ -91,10 +97,23 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
             raise TransportError('invalid_discovery')
         config = dict(config, info=NATIVE_INFO)
     prepare = method == 'POST' and path == '/api/v1/tasks' and config.get('prepare_unsecured', False)
-    payload = base64.b64encode(json.dumps(dict(method=method, path=path, body=body,
-        info=config['info'], state_dir=config['state_dir'], prepare_unsecured=prepare)).encode()).decode()
-    command = 'export LD_LIBRARY_PATH=' + shlex.quote(config['library']) + '; ' + shlex.join([
-        config['python'], config['bridge'], payload])
+    request = dict(method=method, path=path, body=body, info=config['info'], prepare_unsecured=prepare)
+    if config.get('runtime_env') is True:
+        # ROOTDIR and USRDIR belong to this phone's authenticated FIRERPA
+        # process; never copy another phone's generated runtime path.
+        wrapper = ("import os,sys,json,base64; r=json.loads(base64.b64decode(sys.argv[1])); "
+                   "u=os.environ['USRDIR']; root=os.environ['ROOTDIR']; "
+                   "r['state_dir']=os.path.join(u,'phone-pilot','bk-ai'); "
+                   "p=base64.b64encode(json.dumps(r).encode()).decode(); "
+                   "py=os.path.join(root,'bin','python3'); "
+                   "os.execv(py,[py,os.path.join(u,'modules','bk_ai_phone_mcp_candidate.py'),p])")
+        payload = base64.b64encode(json.dumps(request).encode()).decode()
+        command = 'export LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" -c ' + shlex.quote(wrapper) + ' ' + shlex.quote(payload)
+    else:
+        request['state_dir'] = config['state_dir']
+        payload = base64.b64encode(json.dumps(request).encode()).decode()
+        command = 'export LD_LIBRARY_PATH=' + shlex.quote(config['library']) + '; ' + shlex.join([
+            config['python'], config['bridge'], payload])
     # Each wait owns its own authenticated connection. The caller schedules it
     # outside the control pool; these deadlines do not enlarge stop/query calls.
     # A batch performs at most four bounded three-second loopback reads. It does

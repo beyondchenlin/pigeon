@@ -28,6 +28,25 @@ class TransportTests(unittest.TestCase):
                 path.write_text(json.dumps({'_default': dict(common, bridge='relative')}), encoding='utf-8')
                 with self.assertRaises(transport.TransportError):
                     transport.mapping('newdevice')
+                shared = {'runtime_env': True, 'info': 'auto'}
+                path.write_text(json.dumps({'_default': shared}), encoding='utf-8')
+                self.assertEqual(shared, transport.mapping('newdevice'))
+                path.write_text(json.dumps({'_default': dict(shared, bridge='/custom')}), encoding='utf-8')
+                with self.assertRaises(transport.TransportError):
+                    transport.mapping('newdevice')
+
+    def test_shared_runtime_command_uses_phone_environment(self):
+        device = MagicMock()
+        device.execute_script.return_value = SimpleNamespace(stdout=b'{"http":200,"body":{}}')
+        with patch('lamda.client.Device', return_value=device), \
+             patch('grpc.intercept_channel', side_effect=lambda channel, _: channel), \
+             patch.object(transport, 'mapping', return_value={'runtime_env': True, 'info': 'auto'}), \
+             patch.dict(os.environ, {'API_PORT': '65000'}):
+            transport.call('newdevice', 'GET', '/api/v1/native-discovery', discover_native=True)
+        command = device.execute_script.call_args.args[0]
+        self.assertIn('"$ROOTDIR/bin/python3"', command)
+        self.assertIn('USRDIR', command)
+        self.assertNotIn('/data/local/tmp/CnyL76', command)
 
     def invoke(self, method, path, warmup_error=False, body=None, response=None, **options):
         events = []
