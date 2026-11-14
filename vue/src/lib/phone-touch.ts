@@ -7,11 +7,13 @@ type Options = {
   lost: () => void;
   log: (message: string) => void;
   stats?: (route: Route, rtt: number | null) => void;
+  lazy?: boolean;
 };
 
 export function createPhoneTouch(o: Options) {
   let disposed = false, ws: WebSocket | undefined, dc: RTCDataChannel | undefined;
   let route: Route = 'none', gesture: Route = 'none', capability = false, claiming = false;
+  let enabled = !o.lazy;
   let sequence = 0, lastRx = 0, retryCount = 0, notBefore = 0;
   let retry: ReturnType<typeof setTimeout> | undefined, handshake: ReturnType<typeof setTimeout> | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined, claimTimer: ReturnType<typeof setTimeout> | undefined;
@@ -41,7 +43,7 @@ export function createPhoneTouch(o: Options) {
     }
   }
   function claim() {
-    if (disposed || !capability || claiming || gesture !== 'none' || dc?.readyState !== 'open') return;
+    if (disposed || !enabled || !capability || claiming || gesture !== 'none' || dc?.readyState !== 'open') return;
     if (performance.now() < notBefore) {
       clearTimeout(claimTimer); claimTimer = setTimeout(claim, notBefore - performance.now()); return;
     }
@@ -51,7 +53,7 @@ export function createPhoneTouch(o: Options) {
     claimTimer = setTimeout(failDc, 4000);
   }
   function connectWs() {
-    if (disposed || route === 'p2p' || claiming) return;
+    if (disposed || !enabled || route === 'p2p' || claiming) return;
     if (performance.now() < notBefore) {
       clearTimeout(retry); retry = setTimeout(connectWs, notBefore - performance.now()); return;
     }
@@ -130,11 +132,17 @@ export function createPhoneTouch(o: Options) {
     if (gesture === 'none' && capability && route !== 'p2p') claim();
     return true;
   }
-  connectWs();
+  if (enabled) connectWs();
   return {
     attach, send,
+    activate() {
+      if (disposed || enabled) return;
+      enabled = true;
+      if (capability && dc?.readyState === 'open') claim();
+      else connectWs();
+    },
     get bufferedAmount() { return route === 'p2p' ? dc?.bufferedAmount ?? 0 : ws?.bufferedAmount ?? 0; },
-    recover() { if (route === 'none' && !claiming && !dc) { clearTimeout(retry); connectWs(); } },
+    recover() { if (enabled && route === 'none' && !claiming && !dc) { clearTimeout(retry); connectWs(); } },
     close() {
       if (disposed) return;
       if (gesture !== 'none') send({ action: 'up', id: 0 });

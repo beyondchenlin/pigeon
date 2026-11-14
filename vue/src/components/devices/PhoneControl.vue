@@ -93,7 +93,7 @@ function start() {
   const own = generation;
   let count = 0, measured = performance.now();
   const valid = () => own === generation && enabled.value;
-  touch = createPhoneTouch({ url: deviceSocket(props.deviceId, '/ws/screen/touch'),
+  touch = createPhoneTouch({ url: deviceSocket(props.deviceId, '/ws/screen/touch'), lazy: true,
     ready: (ready, size) => { if (valid()) { touchReady.value = ready; if (size) dimensions = size; } },
     lost: () => { cancelAnimationFrame(moveRaf); moveRaf = 0; lastMove = undefined; pointer = null; },
     log: message => { if (valid()) emit('log', message); },
@@ -141,6 +141,11 @@ function down(e: PointerEvent) {
   if (props.immersive && props.controlsVisible) { emit('hide-tools'); return; }
   if (props.textBusy) return;
   if (input.busy) { input.flush(); emit('log', '文字正在写入手机，请稍后再点击'); return; }
+  if (!touchReady.value && touch && state.value === 'live') {
+    touch.activate();
+    emit('log', '正在准备触控，请连接后再次点击');
+    return;
+  }
   if (send('down', e)) { keyboard.value?.focus({ preventScroll: true }); pointer = e.pointerId; canvas.value?.setPointerCapture(e.pointerId); }
 }
 function move(e: PointerEvent) {
@@ -215,7 +220,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
       <template v-if="immersive"><Button variant="ghost" class="nav-action text-orange-600" aria-label="打开文字输入" :disabled="textBusy" @click="emit('compose')"><MessageSquare class="h-4 w-4" /><span>文字输入</span></Button><Button variant="ghost" class="nav-action" aria-label="打开远控工具" @click="emit('tools')"><MoreHorizontal class="h-4 w-4" /><span>更多</span></Button></template>
       <template v-else><Button variant="ghost" class="nav-action" aria-label="唤醒手机" :disabled="!commandReady" @click="emit('command', 'device/wakeup', [])"><Power class="h-4 w-4" /><span>唤醒</span></Button><Button variant="ghost" class="nav-action" aria-label="重连画面" @click="reconnect"><RotateCw class="h-4 w-4" /><span>重连</span></Button></template>
     </div>
-    <p class="phone-hint text-center text-[11px] text-muted-foreground">{{ touchReady ? '点击或拖动手机画面进行操作' : '触控通道尚未连接' }}</p>
+    <p class="phone-hint text-center text-[11px] text-muted-foreground">{{ touchReady ? '点击或拖动手机画面进行操作' : '点击画面准备触控，连接后再次点击操作' }}</p>
     <p v-if="fullscreenError" role="alert" class="px-3 pb-2 text-xs text-amber-700">{{ fullscreenError }}</p>
     <div class="phone-status border-t text-muted-foreground"><span>{{ commandReady ? '控制通道已连接' : '控制通道未连接' }}</span><span title="浏览器最近两秒实际绘制的帧数，静止画面可能为 0；不是请求帧率">帧率 {{ state === 'live' ? `${fps} FPS` : '—' }}</span><span title="WebRTC 媒体通道往返时间，不是点击到画面变化的端到端延迟">媒体 RTT {{ mediaRtt == null ? '—' : `${mediaRtt} ms` }}</span></div>
   </div>

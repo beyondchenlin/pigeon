@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPhoneTouch } from '../src/lib/phone-touch.ts';
 
-function setup(t) {
+function setup(t, options = {}) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
   const sockets = [], states = [], routes = [];
   let lost = 0;
@@ -24,13 +24,36 @@ function setup(t) {
   const ws = globalThis.WebSocket, perf = Object.getOwnPropertyDescriptor(globalThis, 'performance');
   globalThis.WebSocket = Socket;
   Object.defineProperty(globalThis, 'performance', { configurable: true, value: { now: () => Date.now() } });
-  const touch = createPhoneTouch({ url: '/touch', ready: r => states.push(r), lost: () => lost++, log() {}, stats: r => routes.push(r) });
+  const touch = createPhoneTouch({ url: '/touch', ready: r => states.push(r), lost: () => lost++, log() {}, stats: r => routes.push(r), ...options });
   t.after(() => { touch.close(); globalThis.WebSocket = ws; Object.defineProperty(globalThis, 'performance', perf); });
   const channel = () => { const dc = new Channel(); touch.attach(dc); dc.open(); return dc; };
   const activate = () => { const dc = channel(); dc.receive({ type: 'capability', version: 1 }); dc.receive({ type: 'ready', w: 1080, h: 2388 }); return dc; };
   return { touch, sockets, routes, states, channel, activate, Channel, get lost() { return lost; } };
 }
 const down = { action: 'down', id: 0, x: 10, y: 20 }, up = { action: 'up', id: 0 };
+
+test('viewing does not claim input until the operator activates touch', t => {
+  const s = setup(t, {lazy:true});
+  const dc = s.channel(); dc.receive({type:'capability',version:1});
+  assert.equal(s.sockets.length, 0);
+  assert.equal(dc.sent.some(m=>m.type==='claim'), false);
+  s.touch.recover();
+  assert.equal(s.sockets.length, 0);
+  s.touch.activate();
+  assert.equal(dc.sent.filter(m=>m.type==='claim').length, 1);
+  dc.receive({type:'ready',w:1080,h:2388});
+  assert.equal(s.touch.send(down), true);
+  assert.equal(dc.sent.filter(m=>m.type==='touch').length, 1);
+});
+
+test('lazy WSS activation does not replay the activation click', t => {
+  const s = setup(t, {lazy:true});
+  assert.equal(s.touch.send(down), false);
+  s.touch.activate(); s.sockets[0].open();
+  assert.deepEqual(s.sockets[0].sent, [{action:'reset'}]);
+  assert.equal(s.touch.send(down), true);
+  assert.equal(s.sockets[0].sent.filter(m=>m.action==='down').length, 1);
+});
 
 test('old phones keep WSS when data channel lacks BK capability', t => {
   const s = setup(t); s.sockets[0].open(); const dc = s.channel();
