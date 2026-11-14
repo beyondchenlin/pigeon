@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import QRCode from "ant-design-vue/es/qrcode";
 import { matchHashPath, useHashPathname, useHashRouter } from "@/lib/hash-router";
 import {
   ArrowRightLeft,
@@ -443,6 +444,7 @@ const closeTokenConfig = () => {
   tokenConfigTip.value = null;
   tokenConfigToken.value = "";
   forwardConfigDevice.value = null;
+  platformConfig.value = null;
 };
 
 const copyTokenConfig = async () => {
@@ -780,6 +782,14 @@ const selectedDevices = computed(() => {
   const selectedSet = selectedIds.value;
   return devices.value.filter((d) => selectedSet.has(d.id));
 });
+
+const openSelectedForwardConfig = () => {
+  const device = selectedDevices.value[0];
+  if (selectedDevices.value.length !== 1 || !device || device.mode !== "forward") return;
+  void openTokenConfig(device.tokenId || "", "forward", {
+    domain: device.id, token_id: device.tokenId, cert: device.cert, auth_token: device.authToken,
+  });
+};
 
 watch(() => selectedIds.value.size, (size) => {
   if (size > 0) return;
@@ -1870,6 +1880,11 @@ const onTokenConfigOpenChange = (open: boolean) => {
                   </span>
                 </div>
                 <Separator orientation="vertical" class="h-5" />
+                <Button
+                  v-if="selectedDevices.length === 1 && selectedDevices[0]?.mode === 'forward'"
+                  variant="outline" size="sm" class="h-7 px-2.5 text-[11px]"
+                  @click="openSelectedForwardConfig"
+                >{{ t.devices.forwardConfigQrAction }}</Button>
                 <template v-if="restarting || movingGroup">
                   <span class="max-w-[160px] truncate whitespace-nowrap text-xs text-muted-foreground">
                     {{ restarting
@@ -2085,6 +2100,13 @@ const onTokenConfigOpenChange = (open: boolean) => {
           <p class="text-xs leading-5 text-muted-foreground">
             {{ tokenConfigMode === 'forward' ? t.devices.forwardConfigDesc : t.devices.p2pConfigDesc }}
           </p>
+          <div v-if="tokenConfigMode === 'forward' && tokenConfigText && !tokenConfigLoading" class="flex flex-col items-center gap-2 rounded-md border border-border p-3">
+            <div class="max-w-full overflow-auto rounded bg-white p-4">
+              <QRCode :value="tokenConfigText" :size="320" :bordered="false" color="#111111" bg-color="#ffffff" type="canvas" />
+            </div>
+            <p class="text-center text-xs text-muted-foreground">{{ t.devices.forwardConfigQrHint }}</p>
+            <p class="text-center text-xs text-amber-700">{{ t.devices.forwardConfigQrSecret }}</p>
+          </div>
           <div class="rounded-md border border-border bg-muted/20 p-3">
             <div v-if="tokenConfigLoading" class="flex items-center gap-2 text-xs text-muted-foreground">
               <RotateCw class="h-3.5 w-3.5 animate-spin" />
