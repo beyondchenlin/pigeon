@@ -98,6 +98,11 @@ def onboard(domain, user_id, request_id):
     if old_id:
         return (_reconcile(domain, user_id, device_id, old_id)
                 if phase != 'reserved' else {'state': 'install_unconfirmed', 'attempt_id': old_id})
+    # FIRERPA 10.9's reload RPC can reconnect without restarting the process
+    # that hosts the input guard. Do not start new installs until a verified
+    # complete-restart mechanism is explicitly enabled for this deployment.
+    if os.environ.get('BK_NATIVE_AUTO_RELOAD') != 'verified':
+        return {'state': 'automatic_reload_unavailable'}
     if not check_gateway():
         return {'state': 'gateway_unavailable'}
     try:

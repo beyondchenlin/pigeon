@@ -121,6 +121,7 @@ async function checkNativeConnection() {
       waiting_reconnect: '正在等待手机重新连接并确认保护',
       waiting: '正在检查自动接入状态', onboarding: '正在确认接管保护',
       gateway_unavailable: '服务器接入保护暂未就绪，无法自动加载',
+      automatic_reload_unavailable: '自动加载保护暂未就绪，请联系管理员',
       install_unconfirmed: '保护安装状态未确认，需要管理员检查'
     };
     const key = nativeOnboardingKey(target);

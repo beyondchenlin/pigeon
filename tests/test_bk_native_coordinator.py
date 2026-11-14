@@ -40,8 +40,15 @@ class CoordinatorTests(unittest.TestCase):
         self.gate = patch.object(coordinator,'check_gateway',return_value=True)
         self.channel = patch.object(coordinator,'open_device',return_value=self.phone)
         self.live_worker = patch('server.bk_native_gateway.worker_gone', return_value=False)
-        for item in (self.sessions,self.gate,self.channel,self.live_worker):
+        self.auto_reload = patch.dict(os.environ, {'BK_NATIVE_AUTO_RELOAD':'verified'})
+        for item in (self.sessions,self.gate,self.channel,self.live_worker,self.auto_reload):
             item.start(); self.addCleanup(item.stop)
+
+    def test_unverified_reload_never_starts_a_new_install(self):
+        with patch.dict(os.environ, {'BK_NATIVE_AUTO_RELOAD':'disabled'}):
+            result=coordinator.onboard('phone1',1,str(uuid.uuid4()))
+        self.assertEqual('automatic_reload_unavailable',result['state'])
+        coordinator.open_device.assert_not_called()
 
     def test_reload_once_and_reconcile_same_attempt(self):
         identity=str(uuid.uuid4())
