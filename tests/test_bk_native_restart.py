@@ -33,6 +33,13 @@ class RestartDispatchTests(unittest.TestCase):
             restart.prepare(self.device,self.bundle,self.attempt)
         self.assertEqual(2,self.device.execute_script.call_count)
 
+    def test_resume_checks_existing_files_without_upload(self):
+        self.device.execute_script.return_value=self.reply(output=b'{"state":"ready"}')
+        command=restart.prepare(self.device,self.bundle,self.attempt,reuse=True)
+        self.assertIn('guard-restart',command)
+        self.device.upload_file.assert_not_called()
+        self.device.execute_script.assert_called_once()
+
     def test_wrong_or_unknown_receipt_is_not_success(self):
         self.device.execute_script.return_value=self.reply(output=b'{"state":"prepared","attempt":"other"}')
         self.assertFalse(restart.dispatch(self.device,'command',self.attempt))

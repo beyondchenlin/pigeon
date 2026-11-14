@@ -81,6 +81,47 @@ def _reconcile(domain, user_id, device_id, attempt_id):
     return {'state': 'waiting_reconnect', 'attempt_id': attempt_id}
 
 
+def _resume_reserved(domain, user_id, device_id, attempt_id):
+    """Resume only a complete, verified stage; never upload or replay it."""
+    device = None
+    locked = False
+    dispatched = False
+    try:
+        if not check_gateway():
+            return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
+        device = open_device(domain, 10)
+        locked = bool(device._acquire_lock(leaseTime=300))
+        if not locked:
+            return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
+        restart_id = uuid.UUID(attempt_id).hex
+        command = prepare_restart(device, BUNDLE_DIR, restart_id, reuse=True)
+        with session_scope() as session:
+            current = _identity(session, domain, user_id)
+            if current.state != 'online' or current.controlling or not check_gateway():
+                return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
+            if not begin_dispatch(session, device_id, attempt_id):
+                return {'state': 'waiting', 'attempt_id': attempt_id}
+        dispatched = True
+        try:
+            accepted = dispatch_restart(device, command, restart_id)
+        except Exception:
+            accepted = False
+        return {'state': _record(device_id, attempt_id, 'accepted' if accepted else 'unknown'),
+                'attempt_id': attempt_id}
+    except Exception:
+        if dispatched:
+            try: _record(device_id, attempt_id, 'unknown')
+            except Exception: pass
+            return {'state': 'waiting_reconnect', 'attempt_id': attempt_id}
+        return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
+    finally:
+        if device is not None:
+            if locked:
+                try: device._release_lock()
+                except Exception: pass
+            device.channel.close()
+
+
 def onboard(domain, user_id, request_id):
     try:
         if not isinstance(request_id, str) or str(uuid.UUID(request_id)) != request_id:
@@ -101,7 +142,7 @@ def onboard(domain, user_id, request_id):
             old_id, phase = None, None
     if old_id:
         return (_reconcile(domain, user_id, device_id, old_id)
-                if phase != 'reserved' else {'state': 'install_unconfirmed', 'attempt_id': old_id})
+                if phase != 'reserved' else _resume_reserved(domain, user_id, device_id, old_id))
     # Enable only after this deployment has installed the verified restart
     # helper and its full real-device acceptance has passed.
     if os.environ.get('BK_NATIVE_AUTO_RELOAD') != 'verified':

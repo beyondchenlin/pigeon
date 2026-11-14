@@ -86,12 +86,23 @@ class CoordinatorTests(unittest.TestCase):
 
     def test_uncertain_install_stays_blocked_and_is_not_replayed(self):
         identity=str(uuid.uuid4())
-        with patch.object(coordinator,'provision',side_effect=TimeoutError()) as provision:
+        with patch.object(coordinator,'provision',side_effect=TimeoutError()) as provision, \
+             patch.object(coordinator,'prepare_restart',side_effect=ValueError('stage missing')):
             self.assertEqual(coordinator.onboard('phone1',1,identity)['state'],'install_unconfirmed')
             self.assertEqual(coordinator.onboard('phone1',1,identity)['state'],'install_unconfirmed')
         provision.assert_called_once()
         self.dispatch.assert_not_called()
         with self.scope() as session: self.assertTrue(reload_busy(session,1))
+
+    def test_complete_stage_can_resume_without_reinstall_or_duplicate_restart(self):
+        identity=str(uuid.uuid4())
+        with patch.object(coordinator,'provision',return_value={'state':'reload_required'}) as provision, \
+             patch.object(coordinator,'prepare_restart',side_effect=[TimeoutError(), 'verified-command']) as prepare:
+            self.assertEqual('install_unconfirmed',coordinator.onboard('phone1',1,identity)['state'])
+            self.assertEqual('waiting_reconnect',coordinator.onboard('phone1',1,identity)['state'])
+        provision.assert_called_once()
+        self.assertTrue(prepare.call_args.kwargs['reuse'])
+        self.dispatch.assert_called_once()
 
     def test_disabled_app_never_reloads_and_releases_barrier(self):
         identity=str(uuid.uuid4())
