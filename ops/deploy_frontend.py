@@ -24,9 +24,12 @@ def main():
     parser.add_argument('archive', type=Path)
     parser.add_argument('--sha256', required=True)
     parser.add_argument('--revision', required=True)
+    parser.add_argument('--branch', default='dev')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9a-f]{40}', args.revision):
         raise ValueError('Expected the full dev commit SHA')
+    if not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', args.branch):
+        raise ValueError('Invalid release branch')
     with args.archive.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     if digest != args.sha256.lower():
@@ -84,7 +87,7 @@ def main():
     if not (release / 'upstream-license.txt').is_file():
         raise ValueError('Missing upstream license')
     (release / 'release.json').write_text(json.dumps({
-        'revision': args.revision, 'branch': 'dev', 'archive_sha256': digest,
+        'revision': args.revision, 'branch': args.branch, 'archive_sha256': digest,
     }) + '\n')
 
     # Keep only the small recovery record; the prior build remains in its existing location.
