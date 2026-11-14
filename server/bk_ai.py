@@ -10,7 +10,7 @@ import hashlib
 from tornado.ioloop import PeriodicCallback
 from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device, UserDevice
-from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device,
+from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device, reload_busy,
     script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel)
 from .bk_ai_transport import call, mapping, TransportError, refusal_code, NATIVE_INFO
 from .bk_maintenance import PUBLIC_ORIGIN
@@ -139,6 +139,8 @@ def scheduled_admission_error(session, row):
         return 'access_revoked_before_dispatch'
     if device.state != 'online':
         return 'device_offline_before_dispatch'
+    if reload_busy(session, device.id):
+        return 'device_reload_before_dispatch'
     return None
 
 
@@ -481,7 +483,7 @@ class AiHandler(BaseHttpService):
                 return
             if current.state != 'online':
                 self.throw(503, 'AI_OFFLINE', 'Device is offline; nothing was submitted')
-            if current.controlling or script_busy(s, device.id) or active(s, device.id):
+            if current.controlling or script_busy(s, device.id) or active(s, device.id) or reload_busy(s, device.id):
                 self.throw(409, 'AI_BUSY', 'Device has an active controller, script or unresolved AI task')
             now = time.time()
             row = AiTask(id=task_id, device_id=device.id, user_id=user.id, request_id=request_id,

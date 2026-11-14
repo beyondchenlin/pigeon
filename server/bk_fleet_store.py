@@ -10,7 +10,7 @@ from sqlalchemy import Column, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.types import JSON
 
 from executor.models import Base, Device, DeviceJob, Group, Job, Task, User, UserDevice
-from server.bk_ai_store import AiTask, TERMINAL, active, locked_device, request_cancel, script_busy
+from server.bk_ai_store import AiTask, TERMINAL, active, locked_device, request_cancel, script_busy, reload_busy
 from server.bk_execution import supervision_timeout
 from server.bk_plan import PlanError, execution_id, local_instant, next_daily, plan_fingerprint
 
@@ -137,7 +137,7 @@ def materialize_due(session, job_id, now=None):
                   'access_revoked' if not authorized or device.is_deleted else
                   'device_offline' if device.state != 'online' else
                   'device_busy' if device.controlling or script_busy(session, device.id)
-                      or active(session, device.id) else None)
+                      or active(session, device.id) or reload_busy(session, device.id) else None)
         task = Task(task_id=task_id, device_id=device.id, job_id=job.id, script_id=None,
                     state='failed' if reason else 'bk_pending', reason=reason,
                     params={'scheduled_at': due, 'bk_request_id': request_id},

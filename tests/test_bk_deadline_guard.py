@@ -13,12 +13,13 @@ from sqlalchemy.orm import sessionmaker
 from executor.handlers import event
 from executor.models import Device, DeviceJob, Job, Script, ScriptVersion, Task
 from server import bk_ai_store
+from server.bk_native_reload import NativeReload
 
 
 class CompiledDeadlineGuardTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://')
-        for table in (Device.__table__, Script.__table__, ScriptVersion.__table__, Job.__table__, DeviceJob.__table__, Task.__table__):
+        for table in (Device.__table__, Script.__table__, ScriptVersion.__table__, Job.__table__, DeviceJob.__table__, Task.__table__, NativeReload.__table__):
             table.create(self.engine)
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         self.orig = event.cb_task_status_prepared_imp
@@ -52,6 +53,18 @@ class CompiledDeadlineGuardTests(unittest.TestCase):
             self.assertEqual(job.mode, 'deadline')
         with self.Session() as session:
             self.assertEqual(session.get(Job, 1).mode, 'deadline')
+
+    def test_reload_reservation_blocks_legacy_script_dispatch(self):
+        with self.Session.begin() as session:
+            session.add(Device(id=1, domain='synthetic', state='online'))
+            session.add(NativeReload(device_id=1, user_id=1,
+                attempt_id='00000000-0000-4000-8000-000000000001', phase='reserved'))
+            session.flush()
+            event.cb_task_status_prepared_imp = lambda *args: self.fail('must not dispatch during reload')
+            with patch.object(bk_ai_store, 'locked_device', return_value=SimpleNamespace(id=1, controlling=False)), \
+                 patch.object(bk_ai_store, 'active', return_value=None):
+                bk_ai_store.install_script_guard()
+                self.assertIsNone(event.cb_task_status_prepared_imp(session, SimpleNamespace(device_id=1)))
 
     def test_due_job_stops_without_issuing_a_new_task(self):
         with self.Session.begin() as session:

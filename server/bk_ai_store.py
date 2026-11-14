@@ -63,6 +63,14 @@ def script_busy(session, device_id):
         Task.state.in_(('pending', 'issued', 'running'))).first() is not None
 
 
+def reload_busy(session, device_id):
+    """A durable reload reservation excludes new work until reconciled."""
+    from .bk_native_reload import NativeReload
+    return session.query(NativeReload.device_id).filter(
+        NativeReload.device_id == device_id,
+        NativeReload.phase.notin_(('ready', 'not_sent'))).first() is not None
+
+
 def change(row, status, error=None, snapshot=None):
     now = time.time()
     if row.status != status or row.error != error:
@@ -89,6 +97,8 @@ def request_cancel(row, reason='user_stop'):
 def ensure_schema(engine):
     """Add only nullable receipt metadata; no existing task is rewritten."""
     AiTask.__table__.create(engine, checkfirst=True)
+    from .bk_native_reload import NativeReload
+    NativeReload.__table__.create(engine, checkfirst=True)
     with engine.begin() as connection:
         columns = {column['name'] for column in inspect(connection).get_columns(AiTask.__tablename__)}
         for name in ('execution', 'sync_meta'):
@@ -127,7 +137,7 @@ def install_script_guard():
 
     def dispatch(session, dt):
         device = locked_device(session, dt.device_id)
-        if device.controlling or active(session, device.id):
+        if device.controlling or active(session, device.id) or reload_busy(session, device.id):
             return None
         if dt.job.mode == 'deadline':
             from sqlalchemy.orm.attributes import set_committed_value

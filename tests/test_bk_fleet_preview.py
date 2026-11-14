@@ -17,6 +17,7 @@ from tornado.testing import AsyncHTTPTestCase
 from tornado.web import Application
 from executor.models import Device, DeviceJob, Group, Job, Task, User, UserDevice
 from server.bk_ai_store import AiTask
+from server.bk_native_reload import NativeReload
 from server import bk_fleet
 from server.bk_fleet_store import FleetDraft
 from server import service
@@ -26,7 +27,7 @@ class PreviewTests(AsyncHTTPTestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
         for table in (User.__table__, Device.__table__, Group.__table__, UserDevice.__table__,
-                      Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__, FleetDraft.__table__):
+                      Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__, FleetDraft.__table__, NativeReload.__table__):
             table.create(self.engine)
         factory = sessionmaker(self.engine, expire_on_commit=False)
 

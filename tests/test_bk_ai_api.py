@@ -24,6 +24,7 @@ from tornado.platform.asyncio import BaseAsyncIOLoop
 from executor.models import Device, Task
 from server import bk_ai as api
 from server.bk_ai_store import AiTask, AiAnswer, active, script_busy
+from server.bk_native_reload import NativeReload
 
 
 class PollStartupTests(unittest.TestCase):
@@ -118,7 +119,7 @@ class AiApiTests(AsyncHTTPTestCase):
 
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
-        for table in (Device.__table__, Task.__table__, AiTask.__table__, AiAnswer.__table__):
+        for table in (Device.__table__, Task.__table__, AiTask.__table__, AiAnswer.__table__, NativeReload.__table__):
             table.create(self.engine)
         factory = sessionmaker(self.engine, expire_on_commit=False)
         @contextmanager
@@ -190,6 +191,15 @@ class AiApiTests(AsyncHTTPTestCase):
     def submit(self, **extra):
         body = dict(goal='Read system information only', request_id=str(uuid.uuid4()), timeout_s=60, **extra)
         return body, self.request(body)
+
+    def test_reload_reservation_rejects_new_task_without_dispatch(self):
+        with self.sessions() as s:
+            s.add(NativeReload(device_id=1, user_id=1, attempt_id=str(uuid.uuid4()), phase='reserved'))
+        _, (code, _) = self.submit()
+        self.assertEqual(code, 409)
+        self.assertEqual(self.calls, [])
+        with self.sessions() as s:
+            self.assertEqual(s.query(AiTask).count(), 0)
 
     def test_long_budget_boundaries_and_unchanged_default(self):
         for timeout in (15, 7200, 10800, None):

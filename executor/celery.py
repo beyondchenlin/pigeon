@@ -14,6 +14,8 @@ from celery.signals import worker_init
 @worker_init.connect
 def install_bk_ai_guard(**kwargs):
     from server.bk_ai_store import AiTask, install_script_guard
+    from server.bk_native_reload import NativeReload
     from .models import engine
     AiTask.__table__.create(engine, checkfirst=True)
+    NativeReload.__table__.create(engine, checkfirst=True)
     install_script_guard()

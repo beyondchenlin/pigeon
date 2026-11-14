@@ -8,7 +8,7 @@ if 'POSTGRES_PASSWORD' not in os.environ:
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from executor.models import Device, Task, User, UserDevice
-from server.bk_ai_store import AiTask
+from server.bk_ai_store import AiTask, reload_busy
 from server.bk_native_reload import NativeReload, reserve, begin_dispatch, observe
 
 
@@ -53,6 +53,20 @@ class ReloadReceiptTests(unittest.TestCase):
             self.assertEqual('awaiting_reconnect', observe(s, 1, attempt, 'accepted').phase)
         with self.Session.begin() as s:
             self.assertEqual('ready', observe(s, 1, attempt, 'verified').phase)
+
+    def test_reservation_blocks_new_work_until_verification(self):
+        attempt = str(uuid.uuid4())
+        with self.Session.begin() as s:
+            self.assertFalse(reload_busy(s, 1))
+            reserve(s, 1, 1, attempt)
+            self.assertTrue(reload_busy(s, 1))
+        with self.Session.begin() as s:
+            begin_dispatch(s, 1, attempt)
+            observe(s, 1, attempt, 'accepted')
+            self.assertTrue(reload_busy(s, 1))
+        with self.Session.begin() as s:
+            observe(s, 1, attempt, 'verified')
+            self.assertFalse(reload_busy(s, 1))
 
     def test_rejects_unowned_busy_and_controlling_devices(self):
         with self.Session.begin() as s:

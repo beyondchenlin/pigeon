@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from executor.models import Device, DeviceJob, Group, Job, Task, User, UserDevice
 from server.bk_ai_store import AiTask
+from server.bk_native_reload import NativeReload
 from server.bk_fleet_store import (BK_RUNNING, BK_STOPPED, cancel_job, create_job,
                                    materialize_due, sync_job_results)
 from server.bk_plan import PlanError, validate_plan
@@ -20,7 +21,7 @@ class FleetStoreTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://')
         for table in (User.__table__, Device.__table__, Group.__table__, UserDevice.__table__,
-                      Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__):
+                      Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__, NativeReload.__table__):
             table.create(self.engine)
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         with self.Session.begin() as session:
@@ -89,6 +90,16 @@ class FleetStoreTests(unittest.TestCase):
         with self.Session.begin() as session:
             self.assertEqual(materialize_due(session, job_id, now=1800000060), [])
             self.assertEqual({row.reason for row in session.query(Task)}, {'missed_schedule'})
+            self.assertEqual(session.query(AiTask).count(), 0)
+
+    def test_scheduled_round_does_not_dispatch_during_reload(self):
+        with self.Session.begin() as session:
+            job, _ = create_job(session, 1, str(uuid.uuid4()), self.plan, now=1800000000)
+            job_id = job.id
+            session.add(NativeReload(device_id=1, user_id=1, attempt_id=str(uuid.uuid4()), phase='reserved'))
+        with self.Session.begin() as session:
+            self.assertEqual(materialize_due(session, job_id, now=1800000001), [])
+            self.assertEqual(session.query(Task).filter_by(device_id=1).one().reason, 'device_busy')
             self.assertEqual(session.query(AiTask).count(), 0)
 
     def test_stopped_parent_is_a_dispatch_barrier(self):
