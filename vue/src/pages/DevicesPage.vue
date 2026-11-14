@@ -394,6 +394,8 @@ const ensurePlatformConfig = async () => {
 };
 
 const buildForwardConfigText = (cfg: PlatformConfig, device: ForwardConfigDevice) => {
+  const port = Number(cfg.web_port);
+  if (!cfg.public_ip || !cfg.sapi_ckey || !Number.isInteger(port) || port < 1 || port > 65535 || !/^[a-z0-9]+$/.test(device.domain)) return "";
   return [
     "[pigeon]",
     `properties.remote=http://${cfg.public_ip}:${cfg.web_port}/properties/${device.domain}`,
@@ -430,6 +432,9 @@ const openTokenConfig = async (
   tokenConfigLoading.value = true;
   try {
     await ensurePlatformConfig();
+    if (tokenConfigMode.value === "forward" && !tokenConfigText.value) {
+      throw new Error("Invalid device connection configuration");
+    }
   } catch (error: any) {
     tokenConfigError.value = interpolate(t.value.devices.p2pConfigLoadFailed, { message: String(error?.message || "unknown") });
   } finally {

@@ -17,13 +17,14 @@ assert.ok(chrome && existsSync(join(dist, 'index.html')));
 const old = {domain:'oldphone', mode:'forward', state:'offline', comment:'原手机', model:'模拟手机'};
 const created = {domain:'newphone', mode:'forward', state:'pending', token_id:'fake-device-token'};
 let creates = 0;
+let platformValid = true;
 const calls = [];
 const reply = (res, data, code=200) => { res.writeHead(code, {'content-type':'application/json'}); res.end(JSON.stringify({status:code===200?0:code, data})); };
 const server = createServer((req,res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   if (url.pathname.startsWith('/api/')) {
     calls.push([req.method,url.pathname]);
-    if (url.pathname === '/api/v1/platform/config') return reply(res, {public_ip:'192.0.2.1',web_port:'18000',sapi_ckey:'synthetic-key'});
+    if (url.pathname === '/api/v1/platform/config') return reply(res, {public_ip:'192.0.2.1',web_port:'18000',sapi_ckey:platformValid?'synthetic-key':''});
     if (url.pathname === '/api/v1/device' && req.method === 'POST') { creates++; return reply(res, created); }
     if (url.pathname === '/api/v1/device') return reply(res, {total:1,data:[old]});
     if (url.pathname === '/api/v1/group') return reply(res, {total:0,data:[]});
@@ -87,6 +88,13 @@ try {
   await waitFor("document.querySelector('[role=dialog] canvas') && document.body.innerText.includes('/properties/newphone')");
   assert.equal(creates,1);
   assert.ok(calls.filter(c=>c[1]==='/api/v1/platform/config').length>=2,'reopen must reacquire configuration');
+  await click('关闭');
+  await waitFor("!document.querySelector('[role=dialog] canvas')");
+  platformValid=false;
+  await evalPage("document.querySelector('[data-device-card=oldphone] input[type=checkbox]').click()");
+  await click('接入配置二维码');
+  await waitFor("document.body.innerText.includes('获取配置信息失败')");
+  assert.equal(await evalPage("!!document.querySelector('[role=dialog] canvas')"),false,'invalid configuration must not produce a QR');
   console.log('PASS: existing-device QR, cleanup, and new forward-device QR using synthetic data');
 } finally {
   if(socket?.readyState===1){try{await call('Browser.close',{},null);}catch{}socket.close();}
