@@ -11,7 +11,8 @@ if not os.environ.get('BK_TEST_POSTGRES_URL'):
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from executor.models import Base, Device, Job, Task, User, UserDevice
-from server.bk_ai_store import AiTask
+from server.bk_ai_store import AiTask, locked_device, reload_busy
+from server.bk_native_reload import NativeReload, reserve
 from server.bk_fleet_store import create_job, materialize_due
 from server.bk_plan import validate_plan
 
@@ -64,6 +65,38 @@ class ConcurrentCreationTests(unittest.TestCase):
             with sessions() as session:
                 self.assertEqual(session.query(Task).count(), 1)
                 self.assertEqual(session.query(AiTask).count(), 1)
+            # A new device is used to race the actual row lock: at most one of
+            # a reload reservation and a fresh AI task may be admitted.
+            with sessions.begin() as session:
+                session.add(Device(id=2, domain='phone2', state='online'))
+                session.add(UserDevice(user_id=1, device_id=2))
+            gate = threading.Barrier(2)
+            def reload_attempt():
+                gate.wait(timeout=5)
+                try:
+                    with sessions.begin() as session:
+                        reserve(session, 2, 1, str(uuid.uuid4()))
+                    return True
+                except ValueError as exc:
+                    if str(exc) != 'device_busy': raise
+                    return False
+            def task_attempt():
+                gate.wait(timeout=5)
+                with sessions.begin() as session:
+                    device = locked_device(session, 2)
+                    if reload_busy(session, device.id):
+                        return False
+                    session.add(AiTask(id=str(uuid.uuid4()), device_id=2, user_id=1,
+                        request_id=str(uuid.uuid4()), goal='synthetic', status='submitting', deadline=1800000300))
+                    return True
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                reload_result = pool.submit(reload_attempt)
+                task_result = pool.submit(task_attempt)
+                outcomes = [reload_result.result(timeout=15), task_result.result(timeout=15)]
+            self.assertEqual(sorted(outcomes), [False, True])
+            with sessions() as session:
+                self.assertEqual(session.query(NativeReload).filter_by(device_id=2).count() +
+                                 session.query(AiTask).filter_by(device_id=2).count(), 1)
         finally:
             if engine:
                 engine.dispose()
