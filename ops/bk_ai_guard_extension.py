@@ -76,7 +76,7 @@ def install():
 class BkAiGuardExtension(BaseHttpExtension):
     route = '/bk-ai/health'
     name = 'BK AI input arbitration'
-    version = '1.0.0'
+    version = '1.0.1'
 
     @staticmethod
     def setup(config):

@@ -10,6 +10,7 @@ from .bk_device_channel import open_device
 from .bk_native_gateway_health import check_gateway
 from .bk_native_gateway import remove_dead_worker_connections
 from .bk_native_onboard import provision
+from .bk_native_restart import prepare as prepare_restart, dispatch as dispatch_restart
 from .bk_native_reload import NativeReload, reserve, begin_dispatch, observe
 
 BUNDLE_DIR = Path(os.environ.get('BK_NATIVE_BUNDLE_DIR', '/user/phone-pilot/bk-native-bundle'))
@@ -63,7 +64,7 @@ def _reconcile(domain, user_id, device_id, attempt_id):
             if not locked:
                 return {'state': 'waiting_reconnect', 'attempt_id': attempt_id}
             device.device_info()
-            result = provision(device, BUNDLE_DIR)
+            result = provision(device, BUNDLE_DIR, confirm_guard=True)
         finally:
             if locked:
                 try: device._release_lock()
@@ -71,6 +72,9 @@ def _reconcile(domain, user_id, device_id, attempt_id):
             device.channel.close()
         if result.get('state') == 'connected':
             return {'state': _record(device_id, attempt_id, 'verified'), 'attempt_id': attempt_id}
+        if result.get('guard_confirmed'):
+            _record(device_id, attempt_id, 'verified')
+            return {'state': result.get('state', 'not_ready'), 'attempt_id': attempt_id}
     except Exception:
         # No retry of reload and no release based on a lost/ambiguous response.
         logging.warning('Native guard reconciliation remains unconfirmed')
@@ -98,9 +102,8 @@ def onboard(domain, user_id, request_id):
     if old_id:
         return (_reconcile(domain, user_id, device_id, old_id)
                 if phase != 'reserved' else {'state': 'install_unconfirmed', 'attempt_id': old_id})
-    # FIRERPA 10.9's reload RPC can reconnect without restarting the process
-    # that hosts the input guard. Do not start new installs until a verified
-    # complete-restart mechanism is explicitly enabled for this deployment.
+    # Enable only after this deployment has installed the verified restart
+    # helper and its full real-device acceptance has passed.
     if os.environ.get('BK_NATIVE_AUTO_RELOAD') != 'verified':
         return {'state': 'automatic_reload_unavailable'}
     if not check_gateway():
@@ -139,6 +142,8 @@ def onboard(domain, user_id, request_id):
         if not check_gateway():
             _not_sent(device_id, request_id)
             return {'state': 'gateway_unavailable', 'attempt_id': request_id}
+        restart_id = uuid.UUID(request_id).hex
+        command = prepare_restart(device, BUNDLE_DIR, restart_id)
         if time.monotonic() - started >= 240:
             _not_sent(device_id, request_id)
             return {'state': 'waiting_for_idle', 'attempt_id': request_id}
@@ -151,7 +156,7 @@ def onboard(domain, user_id, request_id):
                 return {'state': 'waiting', 'attempt_id': request_id}
         dispatched = True  # committed before the only non-retrying RPC
         try:
-            accepted = bool(device.reload(clean=False))
+            accepted = dispatch_restart(device, command, restart_id)
         except Exception:
             accepted = False
         outcome = 'accepted' if accepted else 'unknown'

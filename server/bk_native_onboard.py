@@ -38,7 +38,7 @@ def _python_command(script, args):
     return 'export PYTHONDONTWRITEBYTECODE=1 LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" ' + shlex.join([script, *args])
 
 
-def provision(device, bundle_dir, *, request_id=None, start_app=False):
+def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_guard=False):
     """Stage and validate one bundle. A live guard reload is confirmed separately."""
     bundle = Path(bundle_dir)
     files = {}
@@ -74,9 +74,18 @@ def provision(device, bundle_dir, *, request_id=None, start_app=False):
                 time.sleep(2)
                 probe = _result(device.execute_script(cmd, timeout=15))
         if probe.get('state') != 'connected':
+            confirmed = False
+            if confirm_guard:
+                reply = device.execute_script(
+                    _python_command(stage + '/install_bk_native_bridge.py', ['--confirm']), timeout=15)
+                if reply.exitstatus == 0:
+                    value = _result(reply)
+                    confirmed = value.get('installed') is True and value.get('restart_required') is False
             complete = True
-            return {'state': probe.get('state') if probe.get('state') in
-                    ('not_installed', 'not_ready', 'auth_failed', 'incompatible') else 'not_ready'}
+            result = {'state': probe.get('state') if probe.get('state') in
+                      ('not_installed', 'not_ready', 'auth_failed', 'incompatible') else 'not_ready'}
+            if confirmed: result['guard_confirmed'] = True
+            return result
         installed = _result(device.execute_script(
             _python_command(stage + '/install_bk_native_bridge.py', []), timeout=25))
         if installed.get('installed') is not True or type(installed.get('restart_required')) is not bool:

@@ -58,6 +58,13 @@ class OnboardingTests(unittest.TestCase):
             result = onboard.provision(device, ROOT / 'ops', request_id='f' * 32, start_app=True)
         self.assertEqual({'state': 'not_ready'}, result)
 
+    def test_reconnect_can_confirm_guard_without_enabling_connection(self):
+        device = Mock()
+        device.execute_script.side_effect = [self.reply(), self.reply({'state': 'not_ready'}),
+            self.reply({'installed': True, 'restart_required': False}), self.reply()]
+        result=onboard.provision(device,ROOT / 'ops',request_id='f'*32,confirm_guard=True)
+        self.assertEqual({'state':'not_ready','guard_confirmed':True},result)
+
     def test_unchanged_files_do_not_imply_guard_loaded(self):
         device = Mock()
         device.execute_script.side_effect = [self.reply(), self.reply({'state': 'connected'}),
