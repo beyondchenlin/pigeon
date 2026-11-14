@@ -22,7 +22,7 @@ def explicit_immediate(message, devices, groups):
     """Recognize only an exact, explicitly named immediate command."""
     if (not isinstance(message, str) or re.search(
             r'每天|每日|每晚|每周|每月|每隔|定时|明天|明早|后天|今晚|稍后|晚点|过会|之后|下周|下月|星期|周末|周[一二三四五六日天]|'
-            r'上午|下午|晚上|凌晨|持续|直到|\d{1,2}[:：]\d{2}|\d{1,2}\s*点|[零一二三四五六七八九十两]{1,3}点|tomorrow|later|weekly|daily', message, re.I)):
+            r'上午|下午|晚上|凌晨|持续|直到|\d{1,2}[:：]\d{2}|\d{1,2}\s*点|[零一二三四五六七八九十两]{1,3}点|tomorrow|later|weekly|monthly|daily', message, re.I)):
         return None
     match = re.match(r'^\s*(?:请)?让\s*', message)
     if not match:
@@ -112,15 +112,23 @@ def resolve_target(target, devices, groups):
 
 
 def parse_schedule(value):
-    """Validate an explicit one-off or daily schedule and timezone."""
-    if not isinstance(value, dict) or value.get('kind') not in ('now', 'once', 'daily'):
+    """Validate explicit schedules and their local timezone."""
+    if not isinstance(value, dict) or value.get('kind') not in ('now', 'once', 'daily', 'weekly', 'monthly'):
         raise PlanError('schedule_invalid')
     kind = value['kind']
     allowed = {'kind'} if kind == 'now' else {'kind', 'at', 'timezone'}
+    if kind == 'weekly':
+        allowed.add('weekday')
+    if kind == 'monthly':
+        allowed.add('day')
     if set(value) != allowed:
         raise PlanError('schedule_invalid')
     if kind == 'now':
         return {'kind': kind}
+    if kind == 'weekly' and (type(value['weekday']) is not int or not 1 <= value['weekday'] <= 7):
+        raise PlanError('schedule_invalid')
+    if kind == 'monthly' and (type(value['day']) is not int or not 1 <= value['day'] <= 31):
+        raise PlanError('schedule_invalid')
     try:
         zone_name = value['timezone']
         if not isinstance(zone_name, str) or not zone_name:
@@ -142,7 +150,12 @@ def parse_schedule(value):
         raise
     except (ValueError, TypeError, ZoneInfoNotFoundError):
         raise PlanError('schedule_invalid') from None
-    return {'kind': kind, 'at': at, 'timezone': zone_name}
+    result = {'kind': kind, 'at': at, 'timezone': zone_name}
+    if kind == 'weekly':
+        result['weekday'] = value['weekday']
+    if kind == 'monthly':
+        result['day'] = value['day']
+    return result
 
 
 def local_instant(local, zone_name):
@@ -172,5 +185,26 @@ def next_daily(schedule, after):
         instant = local_instant(datetime.combine(day, time(hour, minute)), plan['timezone'])
         if instant > after.astimezone(timezone.utc):
             return instant
+        day += timedelta(days=1)
+    raise PlanError('schedule_invalid')
+
+
+def next_recurring(schedule, after):
+    """Find the next occurrence; months without the selected day are skipped."""
+    plan = parse_schedule(schedule)
+    if plan['kind'] == 'daily':
+        return next_daily(plan, after)
+    if plan['kind'] not in ('weekly', 'monthly') or after.tzinfo is None:
+        raise PlanError('schedule_invalid')
+    local_after = after.astimezone(ZoneInfo(plan['timezone']))
+    hour, minute = map(int, plan['at'].split(':'))
+    day = local_after.date()
+    for _ in range(370):
+        match = (day.isoweekday() == plan['weekday'] if plan['kind'] == 'weekly'
+                 else day.day == plan['day'])
+        if match:
+            local = datetime.combine(day, time(hour, minute))
+            if local > local_after.replace(tzinfo=None):
+                return local_instant(local, plan['timezone'])
         day += timedelta(days=1)
     raise PlanError('schedule_invalid')

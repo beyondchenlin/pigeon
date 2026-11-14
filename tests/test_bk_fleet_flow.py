@@ -108,6 +108,19 @@ class FleetFlowTests(AsyncHTTPTestCase):
         result = self.fetch('/jobs/' + str(job_id))
         self.assertEqual(json.loads(result.body)['data']['devices'][0]['last_task']['state'], 'success')
 
+    def test_recurring_chat_preview_and_job_preserve_selected_schedule(self):
+        for schedule, message in [({'kind':'weekly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'weekday':1}, '让一组每周一20:00读取状态'),
+                                  ({'kind':'monthly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'day':31}, '让一组每月31日20:00读取状态')]:
+            candidate = {'goal':'读取状态', 'target':{'kind':'group', 'name':'一组'}, 'schedule':schedule}
+            with self.subTest(schedule=schedule), patch.object(bk_fleet, 'interpret', return_value=candidate):
+                code, preview = self.post_json('/chat', {'message':message, 'model_id':1, 'timezone':'Asia/Shanghai'})
+                self.assertEqual(code, 200)
+                plan = preview['data']['plan']
+                self.assertEqual(plan['schedule'], schedule)
+                code, created = self.post_json('/jobs', {'request_id':preview['data']['draft_id'], 'plan':plan})
+                self.assertEqual(code, 202)
+                self.assertEqual(created['data']['schedule'], schedule)
+
     def test_stop_before_dispatch_never_sends_to_phone(self):
         job_id = self.create_job()
         bk_fleet._poll_once()

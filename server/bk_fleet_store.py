@@ -12,7 +12,7 @@ from sqlalchemy.types import JSON
 from executor.models import Base, Device, DeviceJob, Group, Job, Task, User, UserDevice
 from server.bk_ai_store import AiTask, TERMINAL, active, locked_device, request_cancel, script_busy, reload_busy
 from server.bk_execution import supervision_timeout
-from server.bk_plan import PlanError, execution_id, local_instant, next_daily, plan_fingerprint
+from server.bk_plan import PlanError, execution_id, local_instant, next_recurring, plan_fingerprint
 
 BK_RUNNING = 'bk_running'
 BK_STOPPED = 'bk_stopped'
@@ -49,7 +49,7 @@ def first_slot(schedule, now):
         if due <= now:
             raise PlanError('schedule_in_past')
         return due
-    return int(next_daily(schedule, instant).timestamp())
+    return int(next_recurring(schedule, instant).timestamp())
 
 
 def create_job(session, user_id, request_id, plan, now=None):
@@ -153,9 +153,9 @@ def materialize_due(session, job_id, now=None):
             session.add(row)
             dispatch.append(task_id)
         session.flush()
-    if plan['schedule']['kind'] == 'daily':
+    if plan['schedule']['kind'] in ('daily', 'weekly', 'monthly'):
         try:
-            next_slot = next_daily(plan['schedule'], datetime.fromtimestamp(due, timezone.utc))
+            next_slot = next_recurring(plan['schedule'], datetime.fromtimestamp(due, timezone.utc))
             meta['next_at'] = int(next_slot.timestamp())
         except PlanError as error:
             # The current round is valid; pause only future ambiguous rounds.

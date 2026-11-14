@@ -160,6 +160,23 @@ class FleetStoreTests(unittest.TestCase):
             self.assertNotEqual(ids[0], first)
             self.assertEqual(session.query(Task).count(), 4)
 
+    def test_weekly_and_monthly_missed_occurrences_are_recorded_and_cancelled(self):
+        for schedule in ({'kind':'weekly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'weekday':1},
+                         {'kind':'monthly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'day':31}):
+            with self.subTest(schedule=schedule):
+                with self.Session.begin() as session:
+                    job, _ = create_job(session, 1, str(uuid.uuid4()), dict(self.plan, schedule=schedule), now=1794646800)
+                    job_id, due = job.id, job.config['bk_fleet']['next_at']
+                with self.Session.begin() as session:
+                    self.assertEqual(materialize_due(session, job_id, now=due + 60), [])
+                    self.assertEqual({row.reason for row in session.query(Task).filter_by(job_id=job_id)}, {'missed_schedule'})
+                    later = session.get(Job, job_id).config['bk_fleet']['next_at']
+                    self.assertGreater(later, due)
+                    self.assertEqual(cancel_job(session, job_id, 1), [])
+                with self.Session.begin() as session:
+                    self.assertEqual(materialize_due(session, job_id, now=later), [])
+                    self.assertEqual(session.query(Task).filter_by(job_id=job_id).count(), 2)
+
     def test_browse_contract_is_preserved_for_each_phone(self):
         execution = {'version':1, 'kind':'browse', 'duration_s':7200, 'clock':'elapsed',
             'finish_timeout_s':60, 'stop_timeout_s':30, 'progress_interval_s':600, 'event_latency_s':30,

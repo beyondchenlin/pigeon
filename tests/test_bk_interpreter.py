@@ -35,6 +35,19 @@ class InterpreterTests(unittest.TestCase):
                            lambda *args, **kwargs: Response('{"clarification":"请指定手机。"}'))
         self.assertEqual(result, {'clarification': '请指定手机。'})
 
+    def test_weekly_and_monthly_reach_model_with_explicit_schedule_contract(self):
+        for kind, text, fields in [('weekly', '让一组每周一20:00读取状态', {'weekday':1}),
+                                   ('monthly', '让一组每月31日20:00读取状态', {'day':31})]:
+            schedule = dict(kind=kind, at='20:00', timezone='Asia/Shanghai', **fields)
+            candidate = {'goal':'读取状态', 'target':{'kind':'group', 'name':'一组'}, 'schedule':schedule}
+            def post(url, **kwargs):
+                instruction = kwargs['json']['messages'][0]['content']
+                self.assertIn('所选日期不存在的月份跳过', instruction)
+                self.assertIn('weekday', instruction)
+                return Response(json.dumps(candidate, ensure_ascii=False))
+            with self.subTest(kind=kind):
+                self.assertEqual(interpret(self.model(), text, 'Asia/Shanghai', {}, 'now', post), candidate)
+
     def test_malformed_output_and_unsupported_provider_fail_closed(self):
         with self.assertRaisesRegex(InterpretationError, 'model_response_invalid'):
             interpret(self.model(), '任务', 'Asia/Shanghai', {}, 'now',

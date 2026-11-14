@@ -13,7 +13,7 @@ class InterpretationError(ValueError):
 def unsupported_request(message):
     """Do not silently turn unsupported duration or recurrence into a plain task."""
     duration = r'(?:\d+(?:\.\d+)?|[零一二两三四五六七八九十百半]+)\s*(?:个)?\s*(?:秒(?:钟)?|分钟|小时|天|hours?|minutes?|seconds?)'
-    recurrence = r'每周|每星期|每月|工作日|每隔|隔天|weekly|monthly|every\s+\d+'
+    recurrence = r'工作日|每隔|隔天|every\s+\d+'
     return bool(re.search(duration + '|' + recurrence + r'|持续(?:运行|浏览|执行)|直到|用量预算', message, re.I))
 
 
@@ -21,7 +21,7 @@ def interpret(model, message, timezone_name, targets, now_iso, post=requests.pos
     if not isinstance(message, str) or not 1 <= len(message.strip()) <= 4000:
         raise InterpretationError('message_invalid')
     if unsupported_request(message):
-        return {'clarification': '请在任务内容中描述浏览目标，把时长和预算填入“按约定时长持续浏览”；每周、每月等重复规则目前暂不支持。'}
+        return {'clarification': '请在任务内容中描述浏览目标，把时长和预算填入“按约定时长持续浏览”；工作日、每隔一段时间等重复规则暂不支持。'}
     if model.provider not in ('openai', 'openai_compatible', 'anthropic', 'ollama'):
         raise InterpretationError('model_provider_unsupported')
     defaults = {'openai':'https://api.openai.com/v1', 'anthropic':'https://api.anthropic.com',
@@ -37,7 +37,11 @@ def interpret(model, message, timezone_name, targets, now_iso, post=requests.pos
         '要么只有 clarification 字段（中文追问），要么恰好包含 goal、target、schedule。'
         'target 是 {"kind":"device"或"group","name":"精确名称"}；'
         'schedule 是 {"kind":"now"}，或 {"kind":"once","at":"YYYY-MM-DDTHH:MM","timezone":"时区"}，'
-        '或 {"kind":"daily","at":"HH:MM","timezone":"时区"}。'
+        '或 {"kind":"daily","at":"HH:MM","timezone":"时区"}，'
+        '或 {"kind":"weekly","at":"HH:MM","timezone":"时区","weekday":1至7}（周一为1，周日为7），'
+        '或 {"kind":"monthly","at":"HH:MM","timezone":"时区","day":1至31}。'
+        '每周、每月只能指定一个日期；多日期、月底、缺少日期或时间等不明确规则必须追问，不要猜测。'
+        '每月所选日期不存在的月份跳过；预览会显示此规则。'
         '设备及分组只能从给出的清单中精确选择；目标不存在或不唯一、时间不清楚时追问。'
         '目标必须完整保留用户的动作和限制，不许添加指令。'
         '若包含浏览时长、次数、用量预算或其他执行结束条件，必须追问，不能将其当作已支持的执行约定。'

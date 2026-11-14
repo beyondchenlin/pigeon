@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from server.bk_plan import (PlanError, execution_id, explicit_immediate, next_daily, parse_schedule,
+from server.bk_plan import (PlanError, execution_id, explicit_immediate, next_daily, next_recurring, parse_schedule,
                             plan_fingerprint, resolve_target, validate_plan)
 
 
@@ -40,6 +40,28 @@ class PlanTests(unittest.TestCase):
         for at in ('2026-03-08T02:30', '2026-11-01T01:30'):
             with self.subTest(at=at), self.assertRaisesRegex(PlanError, 'schedule_ambiguous_time'):
                 parse_schedule({'kind': 'once', 'at': at, 'timezone': 'America/New_York'})
+
+    def test_weekly_and_monthly_respect_calendar_and_timezone(self):
+        weekly = {'kind':'weekly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'weekday':1}
+        self.assertEqual(next_recurring(weekly, datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)),
+                         datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc))
+        monthly = {'kind':'monthly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'day':31}
+        self.assertEqual(next_recurring(monthly, datetime(2027, 1, 31, 12, 0, tzinfo=timezone.utc)),
+                         datetime(2027, 3, 31, 12, 0, tzinfo=timezone.utc))
+        leap = dict(monthly, day=29)
+        self.assertEqual(next_recurring(leap, datetime(2028, 1, 29, 12, 0, tzinfo=timezone.utc)),
+                         datetime(2028, 2, 29, 12, 0, tzinfo=timezone.utc))
+
+    def test_recurring_rejects_invalid_fields_and_dst_gap(self):
+        for schedule in ({'kind':'weekly', 'at':'20:00', 'timezone':'UTC', 'weekday':True},
+                         {'kind':'weekly', 'at':'20:00', 'timezone':'UTC', 'weekday':8},
+                         {'kind':'monthly', 'at':'20:00', 'timezone':'UTC', 'day':0},
+                         {'kind':'monthly', 'at':'20:00', 'timezone':'UTC'}):
+            with self.subTest(schedule=schedule), self.assertRaises(PlanError):
+                parse_schedule(schedule)
+        weekly = {'kind':'weekly', 'at':'02:30', 'timezone':'America/New_York', 'weekday':7}
+        with self.assertRaisesRegex(PlanError, 'schedule_ambiguous_time'):
+            next_recurring(weekly, datetime(2026, 3, 7, 12, 0, tzinfo=timezone.utc))
 
     def test_schedule_rejects_missing_timezone_and_extra_fields(self):
         for schedule in ({'kind': 'daily', 'at': '20:00'},

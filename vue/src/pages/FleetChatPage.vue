@@ -6,7 +6,7 @@ import { validateExecution, type BrowseExecution } from '@/lib/task-request.mjs'
 import { canAutoArrange } from '@/lib/fleet-auto.mjs';
 
 type Model = { id: number; name: string; provider: string };
-type Schedule = { kind: 'now' | 'once' | 'daily'; at?: string; timezone?: string };
+type Schedule = { kind: 'now' | 'once' | 'daily' | 'weekly' | 'monthly'; at?: string; timezone?: string; weekday?: number; day?: number };
 type Plan = { goal: string; target: {kind: string; name: string}; devices: string[]; schedule: Schedule; membership: string; missed: string; execution?: BrowseExecution };
 type Device = {domain: string | null; authorized: boolean; state: string; success: number; failed: number;
   last_task?: {task_id: string; state: string; reason: string | null; answer?: string; scheduled_at: number} | null};
@@ -62,7 +62,12 @@ const reasonText: Record<string, string> = {device_offline:'手机离线，本�
   schedule_invalid:'时间或时区不明确，请在原任务内容中补充。', execution_invalid:'浏览时长或预算不符合要求，请检查填写的执行约定。',
   device_binding_missing:'原计划中的设备绑定已变化，请重新安排。'};
 const showTime = (epoch: number | null | undefined) => epoch ? new Date(epoch * 1000).toLocaleString() : '—';
-const scheduleText = (s: Schedule) => s.kind === 'now' ? '立即执行' : `${s.kind === 'daily' ? '每天' : '一次'} ${s.at}（${s.timezone}）`;
+const scheduleText = (s: Schedule) => {
+  if (s.kind === 'now') return '立即执行';
+  const label = s.kind === 'daily' ? '每天' : s.kind === 'weekly' ? `每周${['一','二','三','四','五','六','日'][(s.weekday || 1) - 1]}` :
+    s.kind === 'monthly' ? `每月 ${s.day} 日（没有该日期的月份跳过）` : '一次';
+  return `${label} ${s.at}（${s.timezone}）`;
+};
 const hasActive = (job: Job) => job.devices.some(device => ['bk_pending', 'bk_active'].includes(device.last_task?.state || ''));
 
 async function toggleRuns(job: Job) {
