@@ -111,10 +111,12 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
                     certificate=str(Path('/user/certificates') / (domain + '.pem')))
     device.channel = grpc.intercept_channel(device.channel, Deadline())
     try:
-        if method == 'POST' and path == '/api/v1/tasks':
+        if (method == 'POST' and path == '/api/v1/tasks') or discover_native:
             # FIRERPA 10.9's startup listener can suppress Android accessibility
             # until its UI driver is initialized. This read initializes the
             # normal coexistence path; shell-only RPC does not initialize it.
+            # Native discovery needs the same read-only initialization, so
+            # an enabled but disconnected accessibility service can rebind.
             device.device_info()
         reply = device.execute_script(command, timeout=script_timeout)
         # stderr is deliberately never logged: native errors may contain secrets.

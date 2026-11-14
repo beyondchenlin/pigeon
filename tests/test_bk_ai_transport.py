@@ -29,7 +29,7 @@ class TransportTests(unittest.TestCase):
                 with self.assertRaises(transport.TransportError):
                     transport.mapping('newdevice')
 
-    def invoke(self, method, path, warmup_error=False, body=None, response=None):
+    def invoke(self, method, path, warmup_error=False, body=None, response=None, **options):
         events = []
         device = MagicMock()
         self.device = device
@@ -47,15 +47,16 @@ class TransportTests(unittest.TestCase):
              patch.object(transport, 'mapping', return_value=config), patch.dict(os.environ, {'API_PORT':'65000'}):
             if warmup_error:
                 with self.assertRaises(transport.TransportError):
-                    transport.call('example', method, path, body)
+                    transport.call('example', method, path, body, **options)
             else:
-                transport.call('example', method, path, body)
+                transport.call('example', method, path, body, **options)
         device.channel.close.assert_called_once()
         return events
 
     def test_initialize_readonly_ui_before_creation_only(self):
         self.assertEqual(self.invoke('POST', '/api/v1/tasks'), ['readonly_ui_init','bridge'])
         self.assertEqual(self.invoke('GET', '/api/v1/tasks/id'), ['bridge'])
+        self.assertEqual(self.invoke('GET', '/api/v1/native-discovery', discover_native=True), ['readonly_ui_init','bridge'])
 
     def test_failed_initialization_never_creates_task(self):
         self.assertEqual(self.invoke('POST', '/api/v1/tasks', warmup_error=True), ['readonly_ui_init'])
