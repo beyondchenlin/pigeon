@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from server.bk_plan import (PlanError, execution_id, next_daily, parse_schedule,
+from server.bk_plan import (PlanError, execution_id, explicit_immediate, next_daily, parse_schedule,
                             plan_fingerprint, resolve_target, validate_plan)
 
 
@@ -70,6 +70,15 @@ class PlanTests(unittest.TestCase):
                      'execution':{'duration_s':7200}}
         with self.assertRaisesRegex(PlanError, 'execution_invalid'):
             validate_plan(candidate, self.devices, self.groups)
+
+    def test_only_explicit_immediate_target_and_complete_goal_are_selected(self):
+        candidate = explicit_immediate('让美国组只回答12', self.devices, self.groups)
+        self.assertEqual(candidate['goal'], '只回答12')
+        self.assertEqual(candidate['target'], {'kind':'group', 'name':'美国组'})
+        self.assertIsNone(explicit_immediate('让美国组每天回答12', self.devices, self.groups))
+        self.assertIsNone(explicit_immediate('让美国组稍后回答12', self.devices, self.groups))
+        self.assertIsNone(explicit_immediate('让手机一回答12', self.devices, self.groups))
+        self.assertIsNone(explicit_immediate('随便找手机回答12', self.devices, self.groups))
 
 
 if __name__ == '__main__':

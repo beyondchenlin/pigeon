@@ -12,8 +12,8 @@ from executor.models import Device, DeviceJob, Group, Job, ModelResource, Task, 
 from server.bk_ai import AiHandler, perform_cancel
 from server.bk_fleet_store import (BK_PAUSED, BK_RUNNING, BK_STATES, FleetDraft, cancel_job, create_job,
                                    materialize_due, sync_job_results)
-from server.bk_plan import PlanError, plan_fingerprint, validate_plan
-from server.bk_interpreter import InterpretationError, interpret
+from server.bk_plan import PlanError, explicit_immediate, plan_fingerprint, validate_plan
+from server.bk_interpreter import InterpretationError, interpret, unsupported_request
 
 FLEET_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix='bk-fleet')
 INTERPRETER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix='bk-plan')
@@ -144,9 +144,11 @@ class FleetChatPlanHandler(AiHandler):
             devices = [{'domain': d.domain, 'name': d.comment, 'group_id': link.group_id} for d, link in rows]
             groups = [{'id': g.id, 'name': g.name} for g in session.query(Group).filter_by(owner_id=user.id)]
         try:
-            candidate = await asyncio.get_running_loop().run_in_executor(
-                INTERPRETER_POOL, interpret, model, body['message'], body['timezone'],
-                {'devices': devices, 'groups': groups}, datetime.now(zone).isoformat())
+            candidate = None if unsupported_request(body['message']) else explicit_immediate(body['message'], devices, groups)
+            if candidate is None:
+                candidate = await asyncio.get_running_loop().run_in_executor(
+                    INTERPRETER_POOL, interpret, model, body['message'], body['timezone'],
+                    {'devices': devices, 'groups': groups}, datetime.now(zone).isoformat())
             if 'clarification' in candidate:
                 self.save_result(draft_id, user.id, revision, question=candidate['clarification'])
                 self.tell({'draft_id': draft_id, 'clarification': candidate['clarification'], 'submitted': False})

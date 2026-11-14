@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import hashlib
 import json
+import re
 import uuid
 from server.bk_execution import ContractError, supervision_timeout, validate_execution
 
@@ -15,6 +16,33 @@ class PlanError(ValueError):
     def __init__(self, code):
         super().__init__(code)
         self.code = code
+
+
+def explicit_immediate(message, devices, groups):
+    """Recognize only an exact, explicitly named immediate command."""
+    if (not isinstance(message, str) or re.search(
+            r'每天|每日|每晚|每周|每月|每隔|定时|明天|明早|后天|今晚|稍后|晚点|过会|之后|下周|下月|星期|周末|周[一二三四五六日天]|'
+            r'上午|下午|晚上|凌晨|持续|直到|\d{1,2}[:：]\d{2}|\d{1,2}\s*点|[零一二三四五六七八九十两]{1,3}点|tomorrow|later|weekly|daily', message, re.I)):
+        return None
+    match = re.match(r'^\s*(?:请)?让\s*', message)
+    if not match:
+        return None
+    rest = message[match.end():]
+    targets = [('device', value) for d in devices for value in (d.get('domain'), d.get('name')) if value]
+    targets += [('group', group.get('name')) for group in groups if group.get('name')]
+    choices = []
+    for kind, name in set(targets):
+        if rest.startswith(name):
+            goal = rest[len(name):].lstrip(' ，,：:').strip()
+            if goal:
+                choices.append({'goal':goal, 'target':{'kind':kind, 'name':name}, 'schedule':{'kind':'now'}})
+    if len(choices) != 1:
+        return None
+    try:
+        resolve_target(choices[0]['target'], devices, groups)
+    except PlanError:
+        return None
+    return choices[0]
 
 
 def validate_plan(candidate, devices, groups):
