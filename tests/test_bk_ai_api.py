@@ -61,7 +61,61 @@ class PollStartupTests(unittest.TestCase):
             asyncio.set_event_loop(None)
 
 
+class NativeDiscoveryTests(AsyncHTTPTestCase):
+    def get_app(self):
+        class Handler(api.NativeDiscoveryHandler):
+            def get_login_user_device(self, domain):
+                if self.request.headers.get('X-Test-Auth') != 'owner':
+                    self.throw(401, 'AUTH', 'unauthorized')
+                return SimpleNamespace(id=1), SimpleNamespace(state='offline' if domain == 'offline' else 'online')
+        return Application([(r'/api/v1/device/([a-z0-9]+)/ai/native-discovery', Handler)], ctl=None)
+
+    def test_discovery_requires_authorization_and_reports_offline(self):
+        with patch.object(api, 'call') as call:
+            self.assertEqual(401, self.fetch('/api/v1/device/phonea/ai/native-discovery').code)
+            response = self.fetch('/api/v1/device/offline/ai/native-discovery', headers={'X-Test-Auth': 'owner'})
+            self.assertEqual('offline', json.loads(response.body)['data']['state'])
+            call.assert_not_called()
+
+    def test_discovery_only_returns_public_status(self):
+        with patch.object(api, 'call', return_value={'http': 200, 'body': {
+                'state': 'connected', 'version': '44', 'token': 'private'}}) as call:
+            response = self.fetch('/api/v1/device/phonea/ai/native-discovery', headers={'X-Test-Auth': 'owner'})
+            self.assertEqual({'state': 'connected', 'version': '44'}, json.loads(response.body)['data'])
+            call.assert_called_once_with('phonea', 'GET', '/api/v1/native-discovery', discover_native=True)
+
+
 class AiApiTests(AsyncHTTPTestCase):
+    def test_native_task_binding_survives_mapping_change(self):
+        calls = []
+        def native_call(domain, method, path, body=None, **kwargs):
+            calls.append((method, path, kwargs))
+            if kwargs.get('discover_native'):
+                return {'http': 200, 'body': {'state': 'connected'}}
+            if method == 'POST' and path == '/api/v1/tasks':
+                return {'http': 200, 'body': {'task_id': body['request_id'], 'status': 'running'}}
+            return {'http': 200, 'body': {'task_id': path.split('/')[4], 'status': 'running'}}
+        with patch.object(api, 'mapping', return_value={'info': 'auto'}), \
+             patch.object(api, 'call', side_effect=native_call):
+            _, (code, response) = self.submit()
+        self.assertEqual(202, code)
+        task_id = response['data']['task_id']
+        with self.sessions() as s:
+            self.assertEqual(api.NATIVE_INFO, s.get(AiTask, task_id).sync_meta['phone_info'])
+        with patch.object(api, 'mapping', return_value={'info': '/old/path'}), \
+             patch.object(api, 'call', side_effect=native_call):
+            api.reconcile(task_id)
+        self.assertTrue(any(options.get('create_native') is True for _, _, options in calls))
+        self.assertEqual(api.NATIVE_INFO, calls[-1][2].get('task_info'))
+
+    def test_native_not_ready_never_dispatches(self):
+        with patch.object(api, 'mapping', return_value={'info': 'auto'}), \
+             patch.object(api, 'call', return_value={'http': 200, 'body': {'state': 'guard_not_ready'}}) as call:
+            _, (code, response) = self.submit()
+        self.assertEqual(202, code)
+        self.assertEqual('rejected', response['data']['status'])
+        self.assertEqual(1, call.call_count)
+
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
         for table in (Device.__table__, Task.__table__, AiTask.__table__, AiAnswer.__table__):

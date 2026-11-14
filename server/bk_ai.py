@@ -12,7 +12,7 @@ from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device, UserDevice
 from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device,
     script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel)
-from .bk_ai_transport import call, mapping, TransportError, refusal_code
+from .bk_ai_transport import call, mapping, TransportError, refusal_code, NATIVE_INFO
 from .bk_maintenance import PUBLIC_ORIGIN
 from .bk_execution import (ContractError, validate_execution, supervision_timeout,
     request_signature, supports_execution, DEFAULT_TIMEOUT_S, MIN_TIMEOUT_S, MAX_TIMEOUT_S)
@@ -27,6 +27,16 @@ CANCEL_INFLIGHT = set()
 KNOWN = frozenset(('starting', 'running', 'queued', 'paused', 'waiting_for_answer',
     'waiting_on_phone', 'finishing', 'stopping', 'stop_unconfirmed', 'finish_overdue',
     'done', 'failed', 'cancelled'))
+
+
+def task_call(domain, task_id, method, path, body=None):
+    """Use the persisted package for follow-up operations, including after restart."""
+    with session_scope() as s:
+        row = s.query(AiTask).filter_by(id=task_id).one()
+        info = (row.sync_meta or {}).get('phone_info')
+    if info:
+        return call(domain, method, path, body, task_info=info)
+    return call(domain, method, path, body)
 
 
 def apply_reply(task_id, reply, submitting=False, source='query'):
@@ -113,8 +123,8 @@ def cancel_remote(task_id):
         update_sync(row, next_cancel_at=attempted_at + 2)
     try:
         # Do not wait for an ordinary poll or a held event wait before cancellation.
-        call(domain, 'POST', '/api/v1/tasks/' + task_id + '/cancel', {})
-        apply_reply(task_id, call(domain, 'GET', '/api/v1/tasks/' + task_id))
+        task_call(domain, task_id, 'POST', '/api/v1/tasks/' + task_id + '/cancel', {})
+        apply_reply(task_id, task_call(domain, task_id, 'GET', '/api/v1/tasks/' + task_id))
     except TransportError as e:
         transport_failed(task_id, e.code, attempted_at)
 
@@ -161,6 +171,21 @@ def reconcile(task_id, submit=False):
                 if admission_error:
                     change(row, 'rejected', admission_error)
                     return
+            if mapping(domain).get('info') == 'auto':
+                discovery = call(domain, 'GET', '/api/v1/native-discovery', discover_native=True)
+                body = discovery.get('body')
+                ready = discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'connected'
+                with session_scope() as s:
+                    row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
+                    if row.status in TERMINAL or row.cancel_requested or (row.sync_meta or {}).get('dispatch_started_at'):
+                        return
+                    if not ready:
+                        change(row, 'rejected', 'native_guard_or_connection_unavailable')
+                        return
+                    update_sync(row, phone_info=NATIVE_INFO)
+                    if execution:
+                        change(row, 'rejected', 'unsupported_execution_contract')
+                        return
             if execution:
                 capabilities = call(domain, 'GET', '/api/v1/capabilities')
                 if not supports_execution(capabilities):
@@ -186,13 +211,15 @@ def reconcile(task_id, submit=False):
                     change(row, 'rejected', admission_error)
                     return
                 update_sync(row, dispatch_started_at=time.time())
+                native_selected = (row.sync_meta or {}).get('phone_info') == NATIVE_INFO
             payload = dict(goal=goal, request_id=task_id)
             if execution:
                 payload['execution'] = execution
-            reply = call(domain, 'POST', '/api/v1/tasks', payload)
+            reply = (call(domain, 'POST', '/api/v1/tasks', payload, create_native=True)
+                     if native_selected else call(domain, 'POST', '/api/v1/tasks', payload))
             apply_reply(task_id, reply, submitting=True)
         else:
-            reply = call(domain, 'GET', '/api/v1/tasks/' + task_id)
+            reply = task_call(domain, task_id, 'GET', '/api/v1/tasks/' + task_id)
             apply_reply(task_id, reply)
         # Re-read intent: stop may have arrived while the query was in flight.
         with session_scope() as s:
@@ -256,9 +283,9 @@ def wait_event(task_id):
         update_sync(row, next_event_at=attempted_at + wait_ms / 1000 + 12)
     try:
         if type(revision) is not int:
-            reply = call(domain, 'GET', '/api/v1/tasks/' + task_id)
+            reply = task_call(domain, task_id, 'GET', '/api/v1/tasks/' + task_id)
         else:
-            reply = call(domain, 'POST', '/api/v1/tasks/' + task_id + '/wait',
+            reply = task_call(domain, task_id, 'POST', '/api/v1/tasks/' + task_id + '/wait',
                          {'after_revision': revision, 'timeout_ms': wait_ms})
         if reply['http'] == 204:
             with session_scope() as s:
@@ -312,7 +339,7 @@ def deliver_answer(domain, task_id, request_id, key, text):
     # The durable attempt already exists. A restart/lost response never replays it.
     status = 'unknown'
     try:
-        reply = call(domain, 'POST', '/api/v1/tasks/' + task_id + '/answer',
+        reply = task_call(domain, task_id, 'POST', '/api/v1/tasks/' + task_id + '/answer',
                      dict(text=text, question_key=key, request_id=request_id))
         body = reply.get('body', {})
         if reply['http'] == 200 and isinstance(body, dict) and body.get('accepted') is True and body.get('task_id') == task_id:
@@ -324,6 +351,30 @@ def deliver_answer(domain, task_id, request_id, key, text):
     with session_scope() as s:
         s.get(AiAnswer, request_id).status = status
     reconcile(task_id)
+
+
+class NativeDiscoveryHandler(BaseHttpService):
+    async def get(self, domain):
+        self.set_header('Cache-Control', 'no-store')
+        _, device = self.get_login_user_device(domain)
+        if device.state != 'online':
+            self.tell({'state': 'offline'})
+            return
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                POOL, lambda: call(domain, 'GET', '/api/v1/native-discovery', discover_native=True))
+            body = result.get('body')
+            if result.get('http') != 200 or not isinstance(body, dict):
+                body = {'state': 'not_ready'}
+            allowed = {'connected', 'not_installed', 'not_ready', 'auth_failed', 'incompatible', 'guard_not_ready'}
+            raw_state = body.get('state')
+            state = raw_state if isinstance(raw_state, str) and raw_state in allowed else 'not_ready'
+            value = {'state': state}
+            if state in ('connected', 'guard_not_ready') and isinstance(body.get('version'), str):
+                value['version'] = body['version'][:80]
+            self.tell(value)
+        except TransportError:
+            self.tell({'state': 'not_ready'})
 
 
 class AiHandler(BaseHttpService):
@@ -526,6 +577,8 @@ def install():
     original = Service.__init__
     def initialize(self, *args, **kwargs):
         original(self, *args, **kwargs)
+        self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/native-discovery',
+                              'server.bk_ai', handler='NativeDiscoveryHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover|answer))?)?',
                               'server.bk_ai', handler='AiHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/evidence(?:/([a-f0-9-]{36})/image)?',

@@ -8,6 +8,7 @@ import re
 import shlex
 
 EVIDENCE_BATCH = re.compile(r'/api/v1/evidence/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/chunks/([0-9]{1,7})')
+NATIVE_INFO = '/sdcard/Android/data/com.beyondchenlin.bk101.nativemcp/files/mcp-usb.json'
 
 
 def evidence_batch_request(method, path, body):
@@ -36,16 +37,21 @@ def refusal_code(reply):
     allowed = ('control_busy_or_guard_unavailable', 'manual_takeover',
                'device_not_ready', 'phone_access_disabled', 'conflict',
                'invalid_argument', 'unauthorized', 'forbidden',
-               'unsupported_execution', 'request_signature_unavailable')
+               'unsupported_execution', 'request_signature_unavailable', 'guard_upgrade_required')
     return generic + ':' + reason if isinstance(reason, str) and reason in allowed else generic
 
 
 def mapping(domain):
     path = Path(os.environ.get('BK_AI_DEVICES_FILE', '/user/phone-pilot/bk-ai-devices.json'))
     try:
-        config = json.loads(path.read_text())[domain]
+        configurations = json.loads(path.read_text())
+        config = configurations.get(domain, configurations.get('_default'))
+        if not isinstance(config, dict):
+            raise ValueError('missing configuration')
         for key in ('python', 'bridge', 'info', 'state_dir', 'library'):
             value = config[key]
+            if key == 'info' and value == 'auto':
+                continue
             if not isinstance(value, str) or not value.startswith('/') or not re.fullmatch(r'[/A-Za-z0-9_.-]+', value):
                 raise ValueError('invalid path')
         if type(config.get('prepare_unsecured', False)) is not bool:
@@ -66,12 +72,24 @@ def wait_duration(method, path, body):
     return (body['timeout_ms'] + 999) // 1000
 
 
-def call(domain, method, path, body=None):
+def call(domain, method, path, body=None, *, discover_native=False, task_info=None, create_native=False):
     wait_s = wait_duration(method, path, body)
     batched_evidence = evidence_batch_request(method, path, body)
     import grpc
     from lamda.client import Device
     config = mapping(domain)
+    if create_native:
+        if method != 'POST' or path != '/api/v1/tasks' or discover_native or task_info is not None:
+            raise TransportError('invalid_task_endpoint')
+        config = dict(config, info='auto')
+    if task_info is not None:
+        if task_info != NATIVE_INFO or discover_native or (method == 'POST' and path == '/api/v1/tasks'):
+            raise TransportError('invalid_task_endpoint')
+        config = dict(config, info=task_info)
+    if discover_native:
+        if method != 'GET' or path != '/api/v1/native-discovery' or body is not None:
+            raise TransportError('invalid_discovery')
+        config = dict(config, info=NATIVE_INFO)
     prepare = method == 'POST' and path == '/api/v1/tasks' and config.get('prepare_unsecured', False)
     payload = base64.b64encode(json.dumps(dict(method=method, path=path, body=body,
         info=config['info'], state_dir=config['state_dir'], prepare_unsecured=prepare)).encode()).decode()

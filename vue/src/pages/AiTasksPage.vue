@@ -57,6 +57,8 @@ const taskErrorText = (error: string) => {
   const code = /^(?:模型调用异常:)?model_usage_unreported(?::|$)/.test(error) ? 'model_usage_unreported' : error;
   const messages: Record<string,string> = {
   unsupported_execution_contract:'手机版本不支持本次执行约定，请核对候选包版本。',
+  native_guard_or_connection_unavailable:'新版手机连接或接管保护尚未就绪，本次任务没有发出。',
+  'phone_refused_409:guard_upgrade_required':'接管保护尚未更新，任务没有发出。',
   execution_response_mismatch:'手机返回的执行约定不一致，已请求停止并继续核对。',
   unconfirmed_phone_terminal:'手机终态证据不完整，仍保持占用并继续核对。',
   capability_auth_refused:'手机能力查询未通过认证，请核对连接。',
@@ -97,6 +99,25 @@ const answerDrafts = ref<Record<string,string>>({});
 const answerAttempts = ref<Record<string,boolean>>({});
 const answerError = ref('');
 const stopRequests = ref<Record<string, boolean>>({});
+const nativeConnection = ref('正在检查新版连接…');
+const checkingNative = ref(false);
+async function checkNativeConnection() {
+  if (checkingNative.value) return;
+  checkingNative.value = true;
+  try {
+    const reply = await apiRequest<{state: string; version?: string}>(`/api/v1/device/${domain.value}/ai/native-discovery`, {cache:'no-store'});
+    const state = reply.data?.state || '';
+    const messages: Record<string,string> = {
+      connected: '新版 BK CLAW 已连接', not_installed: '未安装新版 BK CLAW',
+      not_ready: '新版连接未就绪：请先打开 BK CLAW，并检查连接电脑开关',
+      auth_failed: '新版连接认证失败，请检查手机连接设置', offline: '手机离线，请先恢复远控连接',
+      incompatible: '新版接口不兼容，请检查 BK CLAW 版本', guard_not_ready: '新版已连接，但接管保护未就绪，暂不能派任务'
+    };
+    nativeConnection.value = (messages[state] || '新版连接暂时无法确认') +
+      (state === 'connected' && reply.data?.version ? `（${reply.data.version}）` : '');
+  } catch { nativeConnection.value = '新版连接暂时无法确认，请稍后重试'; }
+  finally { checkingNative.value = false; }
+}
 const stopKey = (task: Receipt) => `bk-task-stop:${domain.value}:${task.task_id}`;
 const isStopping = (task: Receipt) => !terminalTask(task.status) && (stoppingTask(task) || !!stopRequests.value[task.task_id]);
 const taskName = (task: Receipt) => isStopping(task) ? '停止待确认' : names[task.status] || task.status;
@@ -228,7 +249,7 @@ onMounted(() => {
     const saved = JSON.parse(sessionStorage.getItem(key.value) || 'null');
     if (saved && /^[a-f0-9-]{36}$/.test(saved.taskId) && /^[a-f0-9-]{36}$/.test(saved.requestId)) pending.value = saved;
   } catch { /* An unreadable local receipt never causes automatic submission. */ }
-  void refresh(); timer = setInterval(() => { void refresh(); }, 5000);
+  void checkNativeConnection(); void refresh(); timer = setInterval(() => { void refresh(); }, 5000);
 });
 onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
 </script>
@@ -240,6 +261,10 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
         <h1 class="mt-3 text-2xl font-semibold">让手机完成任务</h1></div>
       <a :href="toHashHref('/evidence/' + domain)" class="rounded border px-4 py-2 text-sm">查看截图与归档</a>
     </header>
+    <div class="flex flex-wrap items-center gap-3 rounded border p-3 text-sm" role="status">
+      <span>{{ nativeConnection }}</span>
+      <button class="underline" :disabled="checkingNative" @click="checkNativeConnection">刷新连接</button>
+    </div>
     <form class="space-y-3 rounded-lg border bg-card p-4" @submit.prevent="submit">
       <label for="task-goal" class="block font-medium">这次需要做什么？</label>
       <textarea id="task-goal" v-model="goal" rows="4" maxlength="4000" class="w-full resize-y rounded-md border bg-background p-3 text-base"

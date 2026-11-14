@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,20 @@ spec.loader.exec_module(transport)
 
 
 class TransportTests(unittest.TestCase):
+    def test_shared_default_configuration_and_explicit_override(self):
+        common = dict(python='/runtime/python3', library='/runtime/lib', bridge='/user/bridge.py',
+                      info='auto', state_dir='/user/state')
+        special = dict(common, info='/phone/legacy.json')
+        with tempfile.TemporaryDirectory(prefix='bk-mapping-') as directory:
+            path = Path(directory) / 'devices.json'
+            path.write_text(json.dumps({'_default': common, 'legacy': special}), encoding='utf-8')
+            with patch.dict(os.environ, {'BK_AI_DEVICES_FILE': str(path)}):
+                self.assertEqual(common, transport.mapping('newdevice'))
+                self.assertEqual(special, transport.mapping('legacy'))
+                path.write_text(json.dumps({'_default': dict(common, bridge='relative')}), encoding='utf-8')
+                with self.assertRaises(transport.TransportError):
+                    transport.mapping('newdevice')
+
     def invoke(self, method, path, warmup_error=False, body=None, response=None):
         events = []
         device = MagicMock()

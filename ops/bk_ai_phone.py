@@ -27,9 +27,14 @@ EVIDENCE_MAX_REPLY = 1024 * 1024
 EVIDENCE_BATCH = re.compile(r'/api/v1/evidence/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/chunks/([0-9]{1,7})')
 
 
+NATIVE_MCP_PACKAGE = 'com.beyondchenlin.bk101.nativemcp'
+PHONE_PACKAGES = ('com.beyondchenlin.bk101', 'com.beyondchenlin.bk101.mcp', NATIVE_MCP_PACKAGE)
+INFO_PACKAGES = {'/sdcard/Android/data/' + package + '/files/mcp-usb.json': package for package in PHONE_PACKAGES}
+NATIVE_INFO = next(path for path, package in INFO_PACKAGES.items() if package == NATIVE_MCP_PACKAGE)
+
+
 def valid_info(info):
-    return isinstance(info, str) and re.fullmatch(
-        r'/sdcard/Android/data/com\.beyondchenlin\.bk101(?:\.mcp)?/files/mcp-usb\.json', info) is not None
+    return isinstance(info, str) and info in INFO_PACKAGES
 
 
 def lease_key(data):
@@ -66,6 +71,20 @@ def process_identity(pid):
         return Path('/proc/%s/stat' % pid).read_text().rsplit(')', 1)[1].split()[19]
     except (OSError, IndexError):
         return None
+
+
+def native_guard_ready(root):
+    """Read the atomic guard snapshot without creating or changing files."""
+    try:
+        path = Path(root)
+        if path.is_symlink():
+            return False
+        data = json.loads((path / 'state.json').read_text())
+        pid, identity = data.get('guard_pid'), data.get('guard_identity')
+        return bool(identity and data.get('guard_protocol') == {'version': 2, 'pid': pid, 'identity': identity}
+                    and process_identity(pid) == identity)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 def manual_owner(socket_fd):
@@ -123,6 +142,10 @@ def wait_duration(method, path, body):
 
 
 def api(info, method, path, body=None):
+    # The pilot uses the stock task tools for all callers, including manual takeover.
+    if INFO_PACKAGES.get(info) == NATIVE_MCP_PACKAGE:
+        from bk_native_mcp import task_api
+        return task_api(info, method, path, body)
     try:
         wait_s = wait_duration(method, path, body)
     except ValueError:
@@ -171,10 +194,10 @@ def prepare_unsecured(info):
     A ready system state is required; a secure/remaining lock fails closed.
     """
     try:
-        match = re.fullmatch(r'/sdcard/Android/data/(com\.beyondchenlin\.bk101(?:\.mcp)?)/files/mcp-usb\.json', info)
-        if not match:
+        package = INFO_PACKAGES.get(info)
+        if not package:
             return False
-        component = match.group(1) + '/com.wangzan101.mika.ui.MainActivity'
+        component = package + '/com.wangzan101.mika.ui.MainActivity'
         for args in (['input', 'keyevent', 'KEYCODE_WAKEUP'], ['wm', 'dismiss-keyguard'],
                      ['am', 'start', '-n', component]):
             subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3, check=True)
@@ -264,8 +287,38 @@ def terminal_receipt(reply, task_id, execution=None):
 def bridge(request):
     root, info = request['state_dir'], request['info']
     method, path, body = request['method'], request['path'], request.get('body')
+    automatic = info == 'auto'
+    task_id = None
+    if automatic:
+        if method == 'POST' and path == '/api/v1/tasks' and isinstance(body, dict):
+            task_id = body.get('request_id')
+        else:
+            match = re.fullmatch(r'/api/v1/tasks/([a-f0-9-]{36})(?:/(?:cancel|answer|wait))?', path)
+            task_id = match.group(1) if match else None
+        try:
+            if not isinstance(task_id, str) or str(uuid.UUID(task_id)) != task_id:
+                raise ValueError()
+        except (ValueError, AttributeError):
+            return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
+        with state(root) as data:
+            info = data.get('task_info', {}).get(task_id)
+        if info is None and method == 'POST' and path == '/api/v1/tasks':
+            from bk_native_mcp import probe
+            if probe(NATIVE_INFO).get('state') != 'connected':
+                return {'http': 409, 'body': {'error': {'code': 'device_not_ready'}}}
+            info = NATIVE_INFO
+        if not valid_info(info):
+            return {'http': 409, 'body': {'error': {'code': 'task_package_unknown'}}}
     if not valid_info(info):
         return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
+    if method == 'GET' and path == '/api/v1/native-discovery' and body is None:
+        if INFO_PACKAGES.get(info) != NATIVE_MCP_PACKAGE:
+            return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
+        from bk_native_mcp import probe
+        result = probe(info)
+        if result.get('state') == 'connected' and not native_guard_ready(root):
+            result = dict(result, state='guard_not_ready')
+        return {'http': 200, 'body': result}
     if '/chunks/' in path:
         return evidence_batch(info, method, path, body)
     if method == 'POST' and re.fullmatch(r'/api/v1/tasks/[a-f0-9-]{36}/answer', path):
@@ -279,7 +332,21 @@ def bridge(request):
         except (ValueError, TypeError, AttributeError):
             return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
         with state(root) as data:
+            if automatic:
+                previous_info = data.get('task_info', {}).get(task_id)
+                if previous_info is not None and previous_info != info:
+                    return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
+                if previous_info is not None and data.get('ai') != task_id:
+                    if data.get('task_signature', {}).get(task_id) != signature:
+                        return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
+                    # A durable binding means creation may already have been
+                    # attempted; never re-submit after an uncertain outcome.
+                    return api(info, 'GET', '/api/v1/tasks/' + task_id)
             ready = data.get('guard_identity') and process_identity(data.get('guard_pid')) == data['guard_identity']
+            guard_protocol = data.get('guard_protocol')
+            if automatic and guard_protocol != {'version': 2, 'pid': data.get('guard_pid'),
+                                                'identity': data.get('guard_identity')}:
+                return {'http': 409, 'body': {'error': {'code': 'guard_upgrade_required'}}}
             if not ready or data.get('manual') or (data.get('ai') and data['ai'] != task_id):
                 return {'http': 409, 'body': {'error': {'code': 'control_busy_or_guard_unavailable'}}}
             if data.get('ai') == task_id:
@@ -299,6 +366,9 @@ def bridge(request):
                     release_ai(data)
                 return reply
             data['ai'] = task_id
+            if automatic:
+                data.setdefault('task_info', {})[task_id] = info
+                data.setdefault('task_signature', {})[task_id] = signature
             data['ai_info'] = info
             data['ai_signature'] = signature
             data['ai_execution'] = body.get('execution')
@@ -391,8 +461,11 @@ def answer_once(root, info, path, body):
 
 
 def activate_guard(root):
+    pid = os.getpid()
+    identity = process_identity(pid)
     with state(root) as data:
-        data.update(guard_pid=os.getpid(), guard_identity=process_identity(os.getpid()), manual=[])
+        data.update(guard_pid=pid, guard_identity=identity,
+                    guard_protocol={'version': 2, 'pid': pid, 'identity': identity}, manual=[])
 
 
 def enter_manual(root, info=None, socket_fd=None):
