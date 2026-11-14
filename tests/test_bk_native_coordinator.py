@@ -52,6 +52,13 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual('automatic_reload_unavailable',result['state'])
         coordinator.open_device.assert_not_called()
 
+    def test_verified_restart_is_enabled_by_default(self):
+        with patch.dict(os.environ):
+            os.environ.pop('BK_NATIVE_AUTO_RELOAD', None)
+            with patch.object(coordinator, 'provision', return_value={'state':'not_ready'}):
+                result=coordinator.onboard('phone1',1,str(uuid.uuid4()))
+        self.assertEqual('not_ready',result['state'])
+
     def test_reload_once_and_reconcile_same_attempt(self):
         identity=str(uuid.uuid4())
         with patch.object(coordinator,'provision',side_effect=[{'state':'reload_required'},{'state':'connected'}]):
