@@ -12,7 +12,8 @@ from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device, UserDevice
 from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device, reload_busy,
     script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel)
-from .bk_ai_transport import call, mapping, open_native_app, TransportError, refusal_code, NATIVE_INFO
+from .bk_ai_transport import (call, mapping, open_native_app, TransportError, refusal_code, NATIVE_INFO,
+                              NATIVE_INFO_BY_PACKAGE, PILOT_PACKAGE, release_package_enabled)
 from .bk_maintenance import PUBLIC_ORIGIN
 from .bk_execution import (ContractError, validate_execution, supervision_timeout,
     request_signature, supports_execution, DEFAULT_TIMEOUT_S, MIN_TIMEOUT_S, MAX_TIMEOUT_S)
@@ -180,11 +181,17 @@ def reconcile(task_id, submit=False):
                     # An admitted task exclusively owns the device here. Open
                     # the app once, preserving its connection switch, and
                     # require a fresh successful MCP + guard probe before send.
-                    if open_native_app(domain):
+                    package = body.get('package', PILOT_PACKAGE)
+                    if package not in NATIVE_INFO_BY_PACKAGE:
+                        raise TransportError('invalid_native_package')
+                    opened = open_native_app(domain) if package == PILOT_PACKAGE else open_native_app(domain, package)
+                    if opened:
                         time.sleep(2)
                         discovery = call(domain, 'GET', '/api/v1/native-discovery', discover_native=True)
                         body = discovery.get('body')
-                ready = discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'connected'
+                package = body.get('package', PILOT_PACKAGE) if isinstance(body, dict) else None
+                selected_info = NATIVE_INFO_BY_PACKAGE.get(package)
+                ready = discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'connected' and selected_info is not None
                 with session_scope() as s:
                     row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
                     if row.status in TERMINAL or row.cancel_requested or (row.sync_meta or {}).get('dispatch_started_at'):
@@ -192,7 +199,7 @@ def reconcile(task_id, submit=False):
                     if not ready:
                         change(row, 'rejected', 'native_guard_or_connection_unavailable')
                         return
-                    update_sync(row, phone_info=NATIVE_INFO)
+                    update_sync(row, phone_info=selected_info)
                     if execution:
                         change(row, 'rejected', 'unsupported_execution_contract')
                         return
@@ -221,11 +228,13 @@ def reconcile(task_id, submit=False):
                     change(row, 'rejected', admission_error)
                     return
                 update_sync(row, dispatch_started_at=time.time())
-                native_selected = (row.sync_meta or {}).get('phone_info') == NATIVE_INFO
+                native_info = (row.sync_meta or {}).get('phone_info')
+                native_selected = native_info in NATIVE_INFO_BY_PACKAGE.values()
             payload = dict(goal=goal, request_id=task_id)
             if execution:
                 payload['execution'] = execution
-            reply = (call(domain, 'POST', '/api/v1/tasks', payload, create_native=True)
+            reply = (call(domain, 'POST', '/api/v1/tasks', payload, create_native=True,
+                          **({'create_info': native_info} if release_package_enabled() or native_info != NATIVE_INFO else {}))
                      if native_selected else call(domain, 'POST', '/api/v1/tasks', payload))
             apply_reply(task_id, reply, submitting=True)
         else:

@@ -8,6 +8,14 @@ import shlex
 
 EVIDENCE_BATCH = re.compile(r'/api/v1/evidence/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})/chunks/([0-9]{1,7})')
 NATIVE_INFO = '/sdcard/Android/data/com.beyondchenlin.bk101.nativemcp/files/mcp-usb.json'
+RELEASE_PACKAGE = 'com.beyondchenlin.bkclaw'
+PILOT_PACKAGE = 'com.beyondchenlin.bk101.nativemcp'
+RELEASE_INFO = '/sdcard/Android/data/' + RELEASE_PACKAGE + '/files/mcp-usb.json'
+NATIVE_INFO_BY_PACKAGE = {PILOT_PACKAGE: NATIVE_INFO, RELEASE_PACKAGE: RELEASE_INFO}
+
+
+def release_package_enabled():
+    return os.environ.get('BK_CLAW_RELEASE_PACKAGE_ENABLED') == '1'
 
 
 def evidence_batch_request(method, path, body):
@@ -27,14 +35,16 @@ class TransportError(Exception):
         super().__init__(code)
 
 
-def open_native_app(domain):
+def open_native_app(domain, package=PILOT_PACKAGE):
     """Open the installed app once without changing its connection switch."""
     from .bk_device_channel import open_device
     device = None
     try:
+        if package not in NATIVE_INFO_BY_PACKAGE:
+            raise ValueError('unknown package')
         device = open_device(domain, 12)
         reply = device.execute_script(
-            'am start -n com.beyondchenlin.bk101.nativemcp/com.wangzan101.mika.ui.MainActivity', timeout=10)
+            'am start -n ' + package + '/com.wangzan101.mika.ui.MainActivity', timeout=10)
         return reply.exitstatus == 0
     except Exception:
         raise TransportError('app_launch_unconfirmed') from None
@@ -93,25 +103,30 @@ def wait_duration(method, path, body):
     return (body['timeout_ms'] + 999) // 1000
 
 
-def call(domain, method, path, body=None, *, discover_native=False, task_info=None, create_native=False):
+def call(domain, method, path, body=None, *, discover_native=False, task_info=None, create_native=False, create_info=None):
     wait_s = wait_duration(method, path, body)
     batched_evidence = evidence_batch_request(method, path, body)
     from .bk_device_channel import open_device
     config = mapping(domain)
     if create_native:
-        if method != 'POST' or path != '/api/v1/tasks' or discover_native or task_info is not None:
+        if (method != 'POST' or path != '/api/v1/tasks' or discover_native or task_info is not None
+                or (create_info is not None and create_info not in NATIVE_INFO_BY_PACKAGE.values())):
             raise TransportError('invalid_task_endpoint')
         config = dict(config, info='auto')
+    elif create_info is not None:
+        raise TransportError('invalid_task_endpoint')
     if task_info is not None:
-        if task_info != NATIVE_INFO or discover_native or (method == 'POST' and path == '/api/v1/tasks'):
+        if task_info not in NATIVE_INFO_BY_PACKAGE.values() or discover_native or (method == 'POST' and path == '/api/v1/tasks'):
             raise TransportError('invalid_task_endpoint')
         config = dict(config, info=task_info)
     if discover_native:
         if method != 'GET' or path != '/api/v1/native-discovery' or body is not None:
             raise TransportError('invalid_discovery')
-        config = dict(config, info=NATIVE_INFO)
+        config = dict(config, info='auto' if release_package_enabled() else NATIVE_INFO)
     prepare = method == 'POST' and path == '/api/v1/tasks' and config.get('prepare_unsecured', False)
     request = dict(method=method, path=path, body=body, info=config['info'], prepare_unsecured=prepare)
+    if create_info is not None:
+        request['native_info'] = create_info
     if config.get('runtime_env') is True:
         # ROOTDIR and USRDIR belong to this phone's authenticated FIRERPA
         # process; never copy another phone's generated runtime path.

@@ -28,7 +28,9 @@ EVIDENCE_BATCH = re.compile(r'/api/v1/evidence/([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[
 
 
 NATIVE_MCP_PACKAGE = 'com.beyondchenlin.bk101.nativemcp'
-PHONE_PACKAGES = ('com.beyondchenlin.bk101', 'com.beyondchenlin.bk101.mcp', NATIVE_MCP_PACKAGE)
+RELEASE_MCP_PACKAGE = 'com.beyondchenlin.bkclaw'
+NATIVE_MCP_PACKAGES = (RELEASE_MCP_PACKAGE, NATIVE_MCP_PACKAGE)
+PHONE_PACKAGES = ('com.beyondchenlin.bk101', 'com.beyondchenlin.bk101.mcp', *NATIVE_MCP_PACKAGES)
 INFO_PACKAGES = {'/sdcard/Android/data/' + package + '/files/mcp-usb.json': package for package in PHONE_PACKAGES}
 NATIVE_INFO = next(path for path, package in INFO_PACKAGES.items() if package == NATIVE_MCP_PACKAGE)
 
@@ -162,7 +164,7 @@ def wait_duration(method, path, body):
 
 def api(info, method, path, body=None):
     # The pilot uses the stock task tools for all callers, including manual takeover.
-    if INFO_PACKAGES.get(info) == NATIVE_MCP_PACKAGE:
+    if INFO_PACKAGES.get(info) in NATIVE_MCP_PACKAGES:
         from bk_native_mcp import task_api
         return task_api(info, method, path, body)
     try:
@@ -308,6 +310,12 @@ def bridge(request):
     method, path, body = request['method'], request['path'], request.get('body')
     automatic = info == 'auto'
     task_id = None
+    if automatic and method == 'GET' and path == '/api/v1/native-discovery' and body is None:
+        from bk_native_mcp import discover
+        result = discover()
+        if result.get('state') == 'connected' and not native_guard_ready(root):
+            result = dict(result, state='guard_not_ready')
+        return {'http': 200, 'body': result}
     if automatic:
         if method == 'POST' and path == '/api/v1/tasks' and isinstance(body, dict):
             task_id = body.get('request_id')
@@ -321,20 +329,27 @@ def bridge(request):
             return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
         with state(root) as data:
             info = data.get('task_info', {}).get(task_id)
+        if (info is not None and method == 'POST' and path == '/api/v1/tasks'
+                and request.get('native_info') is not None and request['native_info'] != info):
+            return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
         if info is None and method == 'POST' and path == '/api/v1/tasks':
             from bk_native_mcp import probe
-            if probe(NATIVE_INFO).get('state') != 'connected':
+            chosen = request.get('native_info', NATIVE_INFO)
+            package = INFO_PACKAGES.get(chosen)
+            if package not in NATIVE_MCP_PACKAGES:
+                return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
+            if probe(chosen, package=package).get('state') != 'connected':
                 return {'http': 409, 'body': {'error': {'code': 'device_not_ready'}}}
-            info = NATIVE_INFO
+            info = chosen
         if not valid_info(info):
             return {'http': 409, 'body': {'error': {'code': 'task_package_unknown'}}}
     if not valid_info(info):
         return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
     if method == 'GET' and path == '/api/v1/native-discovery' and body is None:
-        if INFO_PACKAGES.get(info) != NATIVE_MCP_PACKAGE:
+        if INFO_PACKAGES.get(info) not in NATIVE_MCP_PACKAGES:
             return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
         from bk_native_mcp import probe
-        result = probe(info)
+        result = probe(info, package=INFO_PACKAGES[info])
         if result.get('state') == 'connected' and not native_guard_ready(root):
             result = dict(result, state='guard_not_ready')
         return {'http': 200, 'body': result}

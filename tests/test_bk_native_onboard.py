@@ -58,6 +58,18 @@ class OnboardingTests(unittest.TestCase):
             result = onboard.provision(device, ROOT / 'ops', request_id='f' * 32, start_app=True)
         self.assertEqual({'state': 'not_ready'}, result)
 
+    def test_formal_package_is_opened_when_its_connection_is_not_ready(self):
+        from unittest.mock import patch
+        device=Mock()
+        device.execute_script.side_effect=[self.reply(),self.reply({'state':'not_ready','package':'com.beyondchenlin.bkclaw'}),
+            self.reply(),self.reply({'state':'connected','package':'com.beyondchenlin.bkclaw'}),
+            self.reply({'installed':True,'restart_required':False}),
+            self.reply({'installed':True,'restart_required':False}),self.reply()]
+        with patch.dict(onboard.os.environ,{'BK_CLAW_RELEASE_PACKAGE_ENABLED':'1'}),patch.object(onboard.time,'sleep'):
+            result=onboard.provision(device,ROOT/'ops',request_id='a'*32,start_app=True)
+        self.assertEqual({'state':'connected'},result)
+        self.assertIn('com.beyondchenlin.bkclaw/',device.execute_script.call_args_list[2].args[0])
+
     def test_reconnect_can_confirm_guard_without_enabling_connection(self):
         device = Mock()
         device.execute_script.side_effect = [self.reply(), self.reply({'state': 'not_ready'}),

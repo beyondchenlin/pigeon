@@ -15,6 +15,15 @@ import uuid
 MAX_RESPONSE = 1024 * 1024
 PROTOCOL = '2025-06-18'
 TASK = re.compile(r'/api/v1/tasks/([a-f0-9-]{36})(?:/(cancel|answer))?\Z')
+RELEASE_PACKAGE = 'com.beyondchenlin.bkclaw'
+PILOT_PACKAGE = 'com.beyondchenlin.bk101.nativemcp'
+NATIVE_PACKAGES = (RELEASE_PACKAGE, PILOT_PACKAGE)
+
+
+def info_for_package(package):
+    if package not in NATIVE_PACKAGES:
+        raise ValueError('unsupported package')
+    return '/sdcard/Android/data/' + package + '/files/mcp-usb.json'
 
 
 def failure(code, status=502):
@@ -105,10 +114,10 @@ class MikaMcp:
         return data
 
 
-def probe(info, package='com.beyondchenlin.bk101.nativemcp',
+def probe(info, package=PILOT_PACKAGE,
           transport_factory=LocalTransport, package_check=None):
     """Read-only discovery; never return the connection file or its secrets."""
-    if package != 'com.beyondchenlin.bk101.nativemcp':
+    if package not in NATIVE_PACKAGES:
         return {'state': 'unsupported_package'}
     if package_check is None:
         def package_check(name):
@@ -142,6 +151,16 @@ def probe(info, package='com.beyondchenlin.bk101.nativemcp',
         return {'state': 'auth_failed' if exc.status in (401, 403) else 'not_ready'}
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return {'state': 'not_ready'}
+
+
+def discover(transport_factory=LocalTransport, package_check=None):
+    """Prefer the release app; never bypass its explicitly closed connection."""
+    for package in NATIVE_PACKAGES:
+        result = probe(info_for_package(package), package=package,
+                       transport_factory=transport_factory, package_check=package_check)
+        if result.get('state') != 'not_installed':
+            return dict(result, package=package)
+    return {'state': 'not_installed'}
 
 
 def task_operation(method, path, body):

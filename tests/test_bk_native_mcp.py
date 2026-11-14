@@ -124,6 +124,41 @@ class TransportTests(unittest.TestCase):
         call.assert_called_once_with(info, 'GET', '/api/v1/device', None)
         self.assertEqual(('mika_device_state', {}, None), mcp.task_operation('GET', '/api/v1/device', None))
 
+    def test_discovery_prefers_release_and_does_not_bypass_closed_release(self):
+        with patch.object(mcp, 'probe', return_value={'state':'not_ready'}) as probe:
+            self.assertEqual({'state':'not_ready','package':mcp.RELEASE_PACKAGE},mcp.discover())
+            probe.assert_called_once()
+            self.assertEqual(mcp.RELEASE_PACKAGE,probe.call_args.kwargs['package'])
+        with patch.object(mcp, 'probe', side_effect=[{'state':'not_installed'},{'state':'connected','version':'44'}]) as probe:
+            self.assertEqual({'state':'connected','version':'44','package':mcp.PILOT_PACKAGE},mcp.discover())
+            self.assertEqual(2,probe.call_count)
+
+    @unittest.skipIf(sys.platform == 'win32', 'phone bridge locking requires Linux or Android')
+    def test_automatic_discovery_reports_release_only_after_guard_check(self):
+        with tempfile.TemporaryDirectory(prefix='bk-release-discovery-') as directory:
+            request={'state_dir':directory,'info':'auto','method':'GET','path':'/api/v1/native-discovery'}
+            with patch.object(mcp,'discover',return_value={'state':'connected','package':mcp.RELEASE_PACKAGE}), \
+                 patch.object(phone,'native_guard_ready',return_value=False):
+                self.assertEqual({'state':'guard_not_ready','package':mcp.RELEASE_PACKAGE},phone.bridge(request)['body'])
+
+    @unittest.skipIf(sys.platform == 'win32', 'phone bridge locking requires Linux or Android')
+    def test_release_task_stays_bound_when_a_different_package_is_requested(self):
+        formal = mcp.info_for_package(mcp.RELEASE_PACKAGE)
+        with tempfile.TemporaryDirectory(prefix='bk-release-bind-') as directory:
+            with phone.state(directory) as data:
+                data.update(guard_pid=100, guard_identity='alive', guard_protocol={'version':2,'pid':100,'identity':'alive'}, manual=[])
+            request={'state_dir':directory,'info':'auto','native_info':formal,'method':'POST',
+                     'path':'/api/v1/tasks','body':{'goal':'calculate','request_id':self.task}}
+            def api(info,method,path,body=None):
+                self.calls.append((info,method))
+                return {'http':200,'body':{'task_id':self.task,'status':'done'}}
+            with patch.object(mcp,'probe',return_value={'state':'connected'}), \
+                 patch.object(phone,'process_identity',return_value='alive'),patch.object(phone,'api',side_effect=api):
+                self.assertEqual(200,phone.bridge(request)['http'])
+                self.assertEqual(409,phone.bridge(dict(request,native_info=phone.NATIVE_INFO))['http'])
+                self.assertEqual(200,phone.bridge(dict(request,method='GET',path='/api/v1/tasks/'+self.task,body=None))['http'])
+            self.assertEqual([(formal,'POST'),(formal,'GET')],self.calls)
+
     def test_stock_phone_rejects_strict_task_before_connect(self):
         body = {'goal': 'Browse', 'request_id': self.task, 'execution': {'kind': 'browse'}}
         self.assertEqual(mcp.failure('unsupported_execution', 400), self.api('POST', '/api/v1/tasks', body))

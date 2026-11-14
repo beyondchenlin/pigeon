@@ -120,6 +120,25 @@ class NativeOnboardApiTests(AsyncHTTPTestCase):
         run.assert_called_once()
 
 class AiApiTests(AsyncHTTPTestCase):
+    def test_release_task_remains_bound_to_release_package(self):
+        from server.bk_ai_transport import RELEASE_INFO, RELEASE_PACKAGE
+        calls=[]
+        def phone(domain, method, path, body=None, **kwargs):
+            calls.append((method,kwargs))
+            if kwargs.get('discover_native'):
+                return {'http':200,'body':{'state':'connected','package':RELEASE_PACKAGE}}
+            task_id=body['request_id'] if method=='POST' else path.split('/')[4]
+            return {'http':200,'body':{'task_id':task_id,'status':'running'}}
+        with patch.dict(os.environ,{'BK_CLAW_RELEASE_PACKAGE_ENABLED':'1'}), \
+             patch.object(api,'mapping',return_value={'info':'auto'}),patch.object(api,'call',side_effect=phone):
+            _,(code,response)=self.submit()
+            task_id=response['data']['task_id']
+            with self.sessions() as s: self.assertEqual(RELEASE_INFO,s.get(AiTask,task_id).sync_meta['phone_info'])
+            api.reconcile(task_id)
+        self.assertEqual(202,code)
+        self.assertEqual(RELEASE_INFO,calls[1][1]['create_info'])
+        self.assertEqual(RELEASE_INFO,calls[-1][1]['task_info'])
+
     def test_task_opens_app_if_needed_and_probes_before_send(self):
         calls=[]
         def phone(domain, method, path, body=None, **kwargs):

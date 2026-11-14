@@ -59,8 +59,12 @@ def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_g
     try:
         for name in FILES:
             device.upload_file(str(bundle / name), stage + '/' + name)
-        probe_code = ("import sys,json;sys.path.insert(0,sys.argv[1]);from bk_native_mcp import probe;"
-                      "print(json.dumps(probe('/sdcard/Android/data/com.beyondchenlin.bk101.nativemcp/files/mcp-usb.json')))" )
+        if os.environ.get('BK_CLAW_RELEASE_PACKAGE_ENABLED') == '1':
+            probe_code = ("import sys,json;sys.path.insert(0,sys.argv[1]);from bk_native_mcp import discover;"
+                          "print(json.dumps(discover()))")
+        else:
+            probe_code = ("import sys,json;sys.path.insert(0,sys.argv[1]);from bk_native_mcp import probe;"
+                          "print(json.dumps(probe('/sdcard/Android/data/com.beyondchenlin.bk101.nativemcp/files/mcp-usb.json')))")
         cmd = ('export PYTHONDONTWRITEBYTECODE=1 LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" -c '
                + shlex.quote(probe_code) + ' ' + shlex.quote(stage))
         probe = _result(device.execute_script(cmd, timeout=15))
@@ -68,8 +72,11 @@ def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_g
             # Opening the installed app starts its normal service; it does not
             # change the user's MCP switch or permissions. Never replay an
             # uncertain launch and never open the app during reconciliation.
+            package = probe.get('package', 'com.beyondchenlin.bk101.nativemcp')
+            if package not in ('com.beyondchenlin.bk101.nativemcp', 'com.beyondchenlin.bkclaw'):
+                raise OnboardError('invalid_package')
             opened = device.execute_script(
-                'am start -n com.beyondchenlin.bk101.nativemcp/com.wangzan101.mika.ui.MainActivity', timeout=10)
+                'am start -n ' + package + '/com.wangzan101.mika.ui.MainActivity', timeout=10)
             if opened.exitstatus == 0:
                 time.sleep(2)
                 probe = _result(device.execute_script(cmd, timeout=15))

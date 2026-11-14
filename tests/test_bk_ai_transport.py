@@ -1,7 +1,9 @@
 import importlib.util
+import base64
 import json
 import os
 import tempfile
+import shlex
 from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
@@ -13,6 +15,20 @@ from server import bk_ai_transport as transport
 
 
 class TransportTests(unittest.TestCase):
+    def test_release_discovery_is_opt_in_and_creation_pins_package(self):
+        device=MagicMock()
+        device.execute_script.return_value=SimpleNamespace(stdout=b'{"http":200,"body":{}}')
+        config=dict(python='/runtime/python3',library='/runtime/lib',bridge='/user/bridge.py',info='auto',state_dir='/user/state')
+        with patch('server.bk_device_channel.open_device',return_value=device),patch.object(transport,'mapping',return_value=config), \
+             patch.dict(os.environ,{'BK_CLAW_RELEASE_PACKAGE_ENABLED':'1'}):
+            transport.call('phone','GET','/api/v1/native-discovery',discover_native=True)
+            payload=shlex.split(device.execute_script.call_args.args[0])[-1]
+            self.assertEqual('auto',json.loads(base64.b64decode(payload))['info'])
+            transport.call('phone','POST','/api/v1/tasks',{'request_id':'test'},create_native=True,create_info=transport.RELEASE_INFO)
+            payload=shlex.split(device.execute_script.call_args.args[0])[-1]
+            request=json.loads(base64.b64decode(payload))
+            self.assertEqual('auto',request['info'])
+            self.assertEqual(transport.RELEASE_INFO,request['native_info'])
     def test_shared_default_configuration_and_explicit_override(self):
         common = dict(python='/runtime/python3', library='/runtime/lib', bridge='/user/bridge.py',
                       info='auto', state_dir='/user/state')
