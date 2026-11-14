@@ -60,7 +60,7 @@ const taskErrorText = (error: string) => {
   execution_response_mismatch:'手机返回的执行约定不一致，已请求停止并继续核对。',
   unconfirmed_phone_terminal:'手机终态证据不完整，仍保持占用并继续核对。',
   capability_auth_refused:'手机能力查询未通过认证，请核对连接。',
-  capability_check_unavailable:'尚未取得手机能力信息，本次任务未派发。请在手机上打开解套应用，确认电脑连接已开启，并检查应用的后台运行设置；连接恢复后再发起任务。',
+  capability_check_unavailable:'暂时无法连接手机，本次任务未派发。请确认手机联网，打开 BK CLAW 并检查电脑连接；如果这台手机使用 Shizuku 和 FIRERPA，重启手机后还需确认它们已启动。恢复连接后再发起任务。',
   connection_unknown:'连接状态待核对，保留原任务编号继续查询。',
   delivery_unknown:'请求是否送达待核对，保留原任务编号继续查询。',
   phone_http_404:'暂未查到手机收据，继续核对原任务。',
