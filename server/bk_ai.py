@@ -12,7 +12,7 @@ from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device, UserDevice
 from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device, reload_busy,
     script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel)
-from .bk_ai_transport import call, mapping, TransportError, refusal_code, NATIVE_INFO
+from .bk_ai_transport import call, mapping, open_native_app, TransportError, refusal_code, NATIVE_INFO
 from .bk_maintenance import PUBLIC_ORIGIN
 from .bk_execution import (ContractError, validate_execution, supervision_timeout,
     request_signature, supports_execution, DEFAULT_TIMEOUT_S, MIN_TIMEOUT_S, MAX_TIMEOUT_S)
@@ -176,6 +176,14 @@ def reconcile(task_id, submit=False):
             if mapping(domain).get('info') == 'auto':
                 discovery = call(domain, 'GET', '/api/v1/native-discovery', discover_native=True)
                 body = discovery.get('body')
+                if discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'not_ready':
+                    # An admitted task exclusively owns the device here. Open
+                    # the app once, preserving its connection switch, and
+                    # require a fresh successful MCP + guard probe before send.
+                    if open_native_app(domain):
+                        time.sleep(2)
+                        discovery = call(domain, 'GET', '/api/v1/native-discovery', discover_native=True)
+                        body = discovery.get('body')
                 ready = discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'connected'
                 with session_scope() as s:
                     row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()

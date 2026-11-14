@@ -120,6 +120,32 @@ class NativeOnboardApiTests(AsyncHTTPTestCase):
         run.assert_called_once()
 
 class AiApiTests(AsyncHTTPTestCase):
+    def test_task_opens_app_if_needed_and_probes_before_send(self):
+        calls=[]
+        def phone(domain, method, path, body=None, **kwargs):
+            calls.append((method,path))
+            if kwargs.get('discover_native'):
+                state = 'not_ready' if len(calls)==1 else 'connected'
+                return {'http':200,'body':{'state':state}}
+            return {'http':200,'body':{'task_id':body['request_id'],'status':'running'}}
+        with patch.object(api,'mapping',return_value={'info':'auto'}), \
+             patch.object(api,'call',side_effect=phone), patch.object(api,'open_native_app',return_value=True) as launch, \
+             patch.object(api.time,'sleep'):
+            _,(code,response)=self.submit()
+        self.assertEqual(202,code)
+        self.assertEqual('running',response['data']['status'])
+        launch.assert_called_once_with('phonea')
+        self.assertEqual(['GET','GET','POST'],[method for method,_ in calls])
+
+    def test_task_does_not_enable_user_disabled_connection(self):
+        with patch.object(api,'mapping',return_value={'info':'auto'}), \
+             patch.object(api,'call',return_value={'http':200,'body':{'state':'not_ready'}}) as call, \
+             patch.object(api,'open_native_app',return_value=True) as launch, patch.object(api.time,'sleep'):
+            _,(_,response)=self.submit()
+        self.assertEqual('rejected',response['data']['status'])
+        self.assertEqual(2,call.call_count)
+        launch.assert_called_once()
+
     def test_native_task_binding_survives_mapping_change(self):
         calls = []
         def native_call(domain, method, path, body=None, **kwargs):

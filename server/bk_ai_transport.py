@@ -27,6 +27,22 @@ class TransportError(Exception):
         super().__init__(code)
 
 
+def open_native_app(domain):
+    """Open the installed app once without changing its connection switch."""
+    from .bk_device_channel import open_device
+    device = None
+    try:
+        device = open_device(domain, 12)
+        reply = device.execute_script(
+            'am start -n com.beyondchenlin.bk101.nativemcp/com.wangzan101.mika.ui.MainActivity', timeout=10)
+        return reply.exitstatus == 0
+    except Exception:
+        raise TransportError('app_launch_unconfirmed') from None
+    finally:
+        if device is not None:
+            device.channel.close()
+
+
 def refusal_code(reply):
     """Keep bounded, known admission reasons; never persist raw phone messages."""
     generic = 'phone_refused_' + str(reply['http'])
