@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from executor.models import Device, DeviceJob, Group, Job, ModelResource, Task, User, UserDevice, session_scope
 from server.bk_ai import AiHandler, perform_cancel
+from server.bk_ai_store import AiTask, TERMINAL
 from server.bk_fleet_store import (BK_PAUSED, BK_RUNNING, BK_STATES, FleetDraft, cancel_job, create_job,
                                    materialize_due, sync_job_results)
 from server.bk_plan import PlanError, explicit_immediate, plan_fingerprint, validate_plan
@@ -218,8 +219,19 @@ def describe_job(session, job, include_runs=False):
         permitted = binding.device_id in authorized and device is not None and not device.is_deleted
         last = (session.query(Task).filter_by(job_id=job.id, device_id=binding.device_id)
                 .order_by(Task.create_time.desc(), Task.id.desc()).first())
+        active = None
+        if permitted:
+            active = (session.query(AiTask).join(Task, Task.task_id == AiTask.id)
+                      .filter(Task.job_id == job.id, Task.device_id == binding.device_id,
+                              AiTask.device_id == binding.device_id, AiTask.user_id == job.owner_id,
+                              AiTask.status.notin_(TERMINAL))
+                      .order_by(AiTask.created.desc()).first())
         devices.append({'domain': device.domain if permitted else None, 'authorized': permitted,
                         'state': binding.task_state, 'success': binding.success, 'failed': binding.failed,
+                        'active_task': ({'task_id': active.id, 'status': active.status,
+                                         'cancel_requested': active.cancel_requested,
+                                         'phone_received_at': (active.sync_meta or {}).get('phone_received_at')}
+                                        if active else None),
                         'last_task': ({'task_id': last.task_id, 'state': last.state, 'reason': last.reason,
                                        'answer': (last.result or {}).get('answer'),
                                        'scheduled_at': (last.params or {}).get('scheduled_at')}

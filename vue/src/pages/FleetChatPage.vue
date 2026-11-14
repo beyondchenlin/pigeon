@@ -4,11 +4,13 @@ import { Sidebar } from '@/components/dashboard/sidebar';
 import { apiRequest, ApiRequestError, formatApiError } from '@/lib/api';
 import { validateExecution, type BrowseExecution } from '@/lib/task-request.mjs';
 import { canAutoArrange } from '@/lib/fleet-auto.mjs';
+import { toHashHref } from '@/lib/hash-router';
 
 type Model = { id: number; name: string; provider: string };
 type Schedule = { kind: 'now' | 'once' | 'daily' | 'weekly' | 'monthly'; at?: string; timezone?: string; weekday?: number; day?: number };
 type Plan = { goal: string; target: {kind: string; name: string}; devices: string[]; schedule: Schedule; membership: string; missed: string; execution?: BrowseExecution };
 type Device = {domain: string | null; authorized: boolean; state: string; success: number; failed: number;
+  active_task?: {task_id: string; status: string; cancel_requested: boolean; phone_received_at?: number | null} | null;
   last_task?: {task_id: string; state: string; reason: string | null; answer?: string; scheduled_at: number} | null};
 type Run = {task_id: string; device: string; state: string; reason: string | null; answer?: string; scheduled_at: number};
 type Job = {id: number; goal: string; state: string; next_at: number | null; schedule: Schedule; schedule_error?: string; devices: Device[]; runs?: Run[]};
@@ -54,6 +56,8 @@ watch([message, modelId, timezone, browse, duration, maxTokens, minObservations,
 const postHeaders = {'X-Requested-With': 'BK-Task'};
 const stateText: Record<string, string> = {bk_running:'等待执行', bk_finished:'本次执行中', bk_done:'本次已结束', bk_stopped:'已停止后续', bk_paused:'需要处理',
   pending:'待执行', running:'执行或核对中', bk_pending:'待执行', bk_active:'执行或核对中', success:'已完成', failed:'未完成', revoked:'已停止', idle:'暂无执行'};
+const activeStateText: Record<string, string> = {starting:'正在启动', submitting:'正在派发', queued:'等待执行', running:'执行中', paused:'已暂停',
+  waiting_for_answer:'需要补充信息', waiting_on_phone:'需要在手机处理', unknown:'状态待核对', finishing:'手机收尾中', finish_overdue:'收尾超期，正在核对'};
 const reasonText: Record<string, string> = {device_offline:'手机离线，本次未执行', missed_schedule:'错过时间，本次未执行',
   device_busy:'手机忙碌，本次未执行', access_revoked:'无设备权限', access_revoked_before_dispatch:'派发前设备权限已撤销',
   device_offline_before_dispatch:'派发前手机离线', schedule_ambiguous_time:'当地时间发生夏令时变化，请重新安排',
@@ -68,7 +72,7 @@ const scheduleText = (s: Schedule) => {
     s.kind === 'monthly' ? `每月 ${s.day} 日（没有该日期的月份跳过）` : '一次';
   return `${label} ${s.at}（${s.timezone}）`;
 };
-const hasActive = (job: Job) => job.devices.some(device => ['bk_pending', 'bk_active'].includes(device.last_task?.state || ''));
+const hasActive = (job: Job) => job.devices.some(device => !!device.active_task || ['bk_pending', 'bk_active'].includes(device.last_task?.state || ''));
 
 async function toggleRuns(job: Job) {
   if (expanded.value === job.id) { expanded.value = null; return; }
@@ -230,7 +234,9 @@ onBeforeUnmount(() => { mounted = false; if (refreshTimer) clearInterval(refresh
             <div class="flex flex-wrap items-start justify-between gap-2"><p class="font-medium">{{ job.goal }}</p><span class="text-sm text-gray-600">{{ stateText[job.state] || job.state }}</span></div>
             <p class="mt-1 text-sm text-gray-500">{{ scheduleText(job.schedule) }}；下次：{{ showTime(job.next_at) }}</p>
             <p v-if="job.schedule_error" class="mt-1 text-sm text-amber-700">{{ reasonText[job.schedule_error] || job.schedule_error }}</p>
-            <ul class="mt-3 space-y-1 text-sm"><li v-for="(device, index) in job.devices" :key="index"><span class="font-medium">{{ device.domain || '已撤销访问' }}</span>：{{ device.last_task ? (reasonText[device.last_task.reason || ''] || stateText[device.last_task.state] || device.last_task.state) : (stateText[device.state] || device.state) }}<span v-if="device.last_task?.answer">；结果：{{ device.last_task.answer }}</span></li></ul>
+            <ul class="mt-3 space-y-2 text-sm"><li v-for="(device, index) in job.devices" :key="index"><span class="font-medium">{{ device.domain || '已撤销访问' }}</span>：{{ device.last_task ? (reasonText[device.last_task.reason || ''] || stateText[device.last_task.state] || device.last_task.state) : (stateText[device.state] || device.state) }}<span v-if="device.last_task?.answer">；结果：{{ device.last_task.answer }}</span>
+              <div v-if="device.active_task && device.domain" class="mt-1 text-amber-800">当前任务：{{ device.active_task.cancel_requested ? '停止待确认' : (activeStateText[device.active_task.status] || '状态待核对') }}<span v-if="device.active_task.phone_received_at">（手机上次反馈：{{ showTime(device.active_task.phone_received_at) }}）</span><span v-else>（尚无手机反馈）</span> · <a class="text-blue-700 underline" :href="toHashHref('/ai/' + device.domain + '?task=' + device.active_task.task_id)">查看并处理原任务</a></div>
+            </li></ul>
             <div class="mt-3 flex flex-wrap gap-3 text-sm"><button class="text-blue-700" @click="toggleRuns(job)">{{ expanded === job.id ? '收起执行记录' : '查看执行记录' }}</button><button v-if="['bk_running', 'bk_paused'].includes(job.state)" class="text-blue-700" :disabled="busy" @click="cancel(job, false)">停止后续安排</button><button v-if="hasActive(job)" class="text-red-700" :disabled="busy" @click="cancel(job, true)">同时停止当前任务</button></div>
             <div v-if="expanded === job.id" class="mt-3 border-t border-gray-100 pt-3 text-sm"><p v-if="!runs.length" class="text-gray-500">暂无执行记录。</p><ul class="space-y-2"><li v-for="run in runs" :key="run.task_id">{{ showTime(run.scheduled_at) }} · {{ run.device }} · {{ reasonText[run.reason || ''] || stateText[run.state] || run.state }}<span v-if="run.answer">：{{ run.answer }}</span></li></ul><p v-if="runs.length === 100" class="mt-2 text-gray-500">显示最近 100 次。</p></div>
           </article>

@@ -133,6 +133,32 @@ class FleetFlowTests(AsyncHTTPTestCase):
             self.assertEqual(s.query(AiTask).one().status, 'cancelled')
             self.assertEqual(s.query(Task).one().state, 'revoked')
 
+    def test_job_shows_waiting_receipt_and_hides_it_after_access_revoked(self):
+        job_id = self.create_job()
+        bk_fleet._poll_once()
+        with self.sessions() as s:
+            receipt = s.query(AiTask).one()
+            receipt.status = 'waiting_for_answer'
+            receipt.snapshot = {'task_id': receipt.id, 'status':'waiting_for_answer',
+                                'question':'私人问题', 'answerable':True}
+            receipt.sync_meta = dict(receipt.sync_meta or {}, phone_received_at=1800000000)
+            task_id = receipt.id
+            s.add(Task(task_id=str(uuid.uuid4()), device_id=1, job_id=job_id, script_id=None,
+                       state='failed', reason='device_busy', params={'scheduled_at':1800000001},
+                       create_time=1800000001, finish_time=1800000001))
+        data = json.loads(self.fetch('/jobs/' + str(job_id)).body)['data']
+        current = data['devices'][0]['active_task']
+        self.assertEqual((current['task_id'], current['status']), (task_id, 'waiting_for_answer'))
+        self.assertEqual(data['devices'][0]['last_task']['reason'], 'device_busy')
+        self.assertEqual(current['phone_received_at'], 1800000000)
+        self.assertNotIn('私人问题', json.dumps(data, ensure_ascii=False))
+        with self.sessions() as s:
+            s.query(UserDevice).filter_by(user_id=1, device_id=1).delete()
+        data = json.loads(self.fetch('/jobs/' + str(job_id)).body)['data']
+        self.assertIsNone(data['devices'][0]['active_task'])
+        self.assertIsNone(data['devices'][0]['domain'])
+        self.assertIsNone(data['devices'][0]['last_task'])
+
     def test_lost_submit_response_only_queries_same_task(self):
         self.create_job()
         bk_fleet._poll_once()

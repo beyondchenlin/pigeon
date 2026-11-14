@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { apiRequest, formatApiError, ApiRequestError } from '@/lib/api';
-import { useHashPathname, toHashHref } from '@/lib/hash-router';
+import { useHashPathname, useHashSearchParams, toHashHref } from '@/lib/hash-router';
 import { prepareTask, dispatchTask, terminalTask, taskProgress, stoppingTask, mergeTaskReceipt, mergeTaskReceipts, validateExecution, supervisionSeconds, type BrowseExecution } from '@/lib/task-request.mjs';
 
 type EndEvidence = { state?: string; evidence_id?: string; task_id?: string; run_id?: string; display_id?: number; captured_at_ms?: number; source?: string; reason?: string; capture_timing?: string; late_capture?: boolean };
@@ -14,6 +14,11 @@ type Receipt = { task_id: string; request_id: string; goal: string; status: stri
   result?: { run_id?: string; progress?: unknown; step?: unknown; answer?: string; reason?: string; message?: string; note?: string; prompt?: string; question?: string; options?: string[]; answerable?: boolean; verified?: boolean; execution_result?: ExecutionResult } };
 type Pending = { taskId: string; requestId: string };
 const path = useHashPathname();
+const params = useHashSearchParams();
+const targetTask = computed(() => {
+  const value = params.value.get('task') || '';
+  return /^[a-f0-9-]{36}$/.test(value) ? value : '';
+});
 // App mounts this page with the device path as its key. Freeze it for in-flight calls.
 const domain = ref(path.value.split('/')[2] || '');
 const goal = ref('');
@@ -198,6 +203,11 @@ async function refresh(manual = false) {
     if (!mounted) return;
     if (!reply.data?.tasks) throw new Error('未取得任务记录');
     receipts.value = mergeTaskReceipts(receipts.value, reply.data.tasks);
+    if (targetTask.value && !reply.data.tasks.some(task => task.task_id === targetTask.value)) {
+      const target = await apiRequest<Receipt>(`/api/v1/device/${domain.value}/ai/tasks/${targetTask.value}?refresh=0`, {cache:'no-store',signal:AbortSignal.timeout(45000)});
+      if (!mounted) return;
+      if (target.data) acceptReceipt(target.data);
+    }
     for (const task of receipts.value) {
       if (task.question_key && sessionStorage.getItem(answerKey(task))) answerAttempts.value[answerKey(task)] = true;
       if (terminalTask(task.status)) { delete stopRequests.value[task.task_id]; sessionStorage.removeItem(stopKey(task)); }
@@ -357,7 +367,8 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
       <div class="flex items-center justify-between"><h2 class="text-lg font-semibold">任务记录</h2>
         <button :disabled="loading" class="rounded border px-3 py-1 text-sm" @click="refresh(true)">刷新状态</button></div>
       <p v-if="loaded && !receipts.length" class="rounded border p-6 text-sm text-muted-foreground">还没有任务。输入本次需求即可开始。</p>
-      <article v-for="task in receipts" :key="task.task_id" class="space-y-3 rounded-lg border bg-card p-4">
+      <article v-for="task in [...receipts].sort((a, b) => Number(b.task_id === targetTask) - Number(a.task_id === targetTask))" :key="task.task_id" class="space-y-3 rounded-lg border bg-card p-4">
+        <p v-if="task.task_id === targetTask" class="text-sm font-medium text-blue-700">从智能任务记录打开的原任务</p>
         <div class="flex flex-wrap justify-between gap-2"><strong>{{ taskName(task) }}</strong>
           <time class="text-sm text-muted-foreground">{{ new Date(task.created_at * 1000).toLocaleString() }}</time></div>
         <p class="whitespace-pre-wrap break-words">{{ task.goal }}</p>
