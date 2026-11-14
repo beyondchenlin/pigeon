@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from executor.models import Device, DeviceJob, Group, Job, ModelResource, Task, User, UserDevice, session_scope
 from server.bk_ai import AiHandler, perform_cancel
 from server.bk_ai_store import AiTask, TERMINAL
-from server.bk_fleet_store import (BK_PAUSED, BK_RUNNING, BK_STATES, FleetDraft, cancel_job, create_job,
+from server.bk_fleet_store import (BK_FINISHED, BK_PAUSED, BK_RUNNING, BK_STATES, FleetDraft, cancel_job, create_job,
                                    materialize_due, sync_job_results)
 from server.bk_plan import PlanError, explicit_immediate, plan_fingerprint, validate_plan
 from server.bk_interpreter import InterpretationError, interpret, unsupported_request
@@ -208,6 +208,15 @@ class FleetModelListHandler(AiHandler):
             models = session.query(ModelResource).filter_by(owner_id=user.id).order_by(ModelResource.id).all()
             self.tell({'user_id': user.id, 'models': [{'id': model.id, 'name': model.name, 'provider': model.provider}
                                                        for model in models]})
+
+
+class FleetJobSummaryHandler(AiHandler):
+    def get(self):
+        with session_scope() as session:
+            user = self.get_login_user(session=session)
+            jobs = session.query(Job).filter_by(owner_id=user.id, mode='bk_managed')
+            self.tell({'running': jobs.filter(Job.state.in_((BK_RUNNING, BK_FINISHED))).count(),
+                       'paused': jobs.filter(Job.state == BK_PAUSED).count()})
 
 
 def describe_job(session, job, include_runs=False):

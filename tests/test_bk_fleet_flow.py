@@ -74,7 +74,9 @@ class FleetFlowTests(AsyncHTTPTestCase):
         class Chat(bk_fleet.FleetChatPlanHandler): get_login_user = auth
         class Jobs(bk_fleet.FleetJobHandler): get_login_user = auth
         class Draft(bk_fleet.FleetDraftHandler): get_login_user = auth
+        class Summary(bk_fleet.FleetJobSummaryHandler): get_login_user = auth
         return Application([(r'/chat', Chat), (r'/draft/([a-f0-9-]{36})', Draft),
+                            (r'/summary', Summary),
                             (r'/jobs(?:/([0-9]+)(?:/(cancel))?)?', Jobs)], ctl=None)
 
     def post_json(self, path, value):
@@ -107,6 +109,17 @@ class FleetFlowTests(AsyncHTTPTestCase):
             self.assertEqual(serialized['mode'], 'bk_managed')
         result = self.fetch('/jobs/' + str(job_id))
         self.assertEqual(json.loads(result.body)['data']['devices'][0]['last_task']['state'], 'success')
+
+    def test_summary_counts_only_current_users_bk_jobs(self):
+        job_id = self.create_job()
+        self.assertEqual(json.loads(self.fetch('/summary').body)['data'], {'running':1, 'paused':0})
+        self.assertEqual(json.loads(self.fetch('/summary', headers={'X-Test-User':'2'}).body)['data'], {'running':0, 'paused':0})
+        with self.sessions() as session:
+            session.get(Job, job_id).state = 'bk_finished'
+        self.assertEqual(json.loads(self.fetch('/summary').body)['data']['running'], 1)
+        with self.sessions() as session:
+            session.get(Job, job_id).state = 'bk_paused'
+        self.assertEqual(json.loads(self.fetch('/summary').body)['data'], {'running':0, 'paused':1})
 
     def test_recurring_chat_preview_and_job_preserve_selected_schedule(self):
         for schedule, message in [({'kind':'weekly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'weekday':1}, '让一组每周一20:00读取状态'),

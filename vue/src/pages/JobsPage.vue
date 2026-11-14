@@ -173,6 +173,8 @@ const loading = ref(false);
 const stopConfirmOpen = ref(false);
 const refreshTick = ref(0);
 const executeOpen = ref(false);
+const executionType = ref<'bk' | 'script'>('bk');
+const statsCoverBk = ref(false);
 const globalStats = ref({
   running: 0,
   paused: 0,
@@ -211,11 +213,11 @@ const buildFilter = computed(() => {
     }
   }
   if (statusFilter.value === "running") {
-    filter.push({ field: "state", op: "eq", value: "running" });
+    filter.push({ field: "state", op: "in", value: ["running", "bk_running", "bk_finished"] });
   } else if (statusFilter.value === "paused") {
-    filter.push({ field: "state", op: "eq", value: "paused" });
+    filter.push({ field: "state", op: "in", value: ["paused", "bk_paused"] });
   } else if (statusFilter.value === "finished") {
-    filter.push({ field: "state", op: "eq", value: "stopped" });
+    filter.push({ field: "state", op: "in", value: ["stopped", "bk_stopped", "bk_done"] });
   }
   return filter.length ? JSON.stringify(filter) : undefined;
 });
@@ -234,9 +236,17 @@ watch(
         });
         if (cancelled) return;
         const data = (res.data || {}) as JobStatusResponse;
+        let bkRunning = 0, bkPaused = 0;
+        try {
+          const summary = await apiRequest<{running: number; paused: number}>('/api/v1/ai/jobs-summary', {cache:'no-store'});
+          if (!summary.data || !Number.isInteger(summary.data.running) || !Number.isInteger(summary.data.paused)) throw new Error('invalid summary');
+          bkRunning = summary.data.running; bkPaused = summary.data.paused;
+          if (!cancelled) statsCoverBk.value = true;
+        } catch { if (!cancelled) statsCoverBk.value = false; }
+        if (cancelled) return;
         globalStats.value = {
-          running: Number(data.running || 0),
-          paused: Number(data.paused || 0),
+          running: Number(data.running || 0) + bkRunning,
+          paused: Number(data.paused || 0) + bkPaused,
           success: Number(data.success || 0),
           failed: Number(data.failed || 0),
           timeout: Number(data.timeout || 0),
@@ -530,7 +540,7 @@ const statChips = computed(() => {
 const modeText = (mode: JobMode): string =>
   mode === "bk_managed"
     ? 'BK 智能任务'
-    : mode === "loop"
+    : '脚本 · ' + (mode === "loop"
     ? t.value.jobsPage.executeModeLoop
     : mode === "count"
     ? t.value.jobsPage.executeModeCount
@@ -538,7 +548,7 @@ const modeText = (mode: JobMode): string =>
     ? t.value.jobsPage.executeModePerDeviceCount
     : mode === "deadline"
     ? t.value.jobsPage.executeModeTime
-    : t.value.jobsPage.executeModeCrontab;
+    : t.value.jobsPage.executeModeCrontab);
 
 const modeToneCls = (mode: JobMode): string =>
   mode === "loop"
@@ -574,14 +584,13 @@ const pageNumbers = computed(() =>
             <h1 class="text-base font-semibold text-gray-900">{{ t.jobsPage.title }}</h1>
           </div>
           <div class="flex items-center gap-2">
-            <a href="#/fleet-chat" class="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-700">智能任务</a>
             <Button
               size="sm"
               class="h-8 gap-1.5 rounded-lg bg-gray-900 px-3.5 text-xs font-medium text-white hover:bg-gray-800"
-              @click="executeOpen = true"
+              @click="executionType = 'bk'; executeOpen = true"
             >
               <Play class="h-3.5 w-3.5" />
-              {{ t.jobsPage.executeJob }}
+              新建任务
             </Button>
             <Button
               variant="outline"
@@ -598,6 +607,7 @@ const pageNumbers = computed(() =>
       </div>
 
       <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
+      <p v-if="!statsCoverBk" class="text-xs text-amber-700">运行中和暂停的统计暂仅包含脚本任务，智能任务统计未连接。</p>
       <!-- Global Stats -->
       <div class="jobs-stat-grid grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <div
@@ -747,7 +757,7 @@ const pageNumbers = computed(() =>
                     idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30',
                     selectedIds.has(job.id) && 'bg-gray-100/70'
                   )"
-                  @click="router.push(job.mode === 'bk_managed' ? '/fleet-chat' : `/jobs/${job.id}`)"
+                  @click="router.push(job.mode === 'bk_managed' ? `/fleet-chat?job=${job.id}` : `/jobs/${job.id}`)"
                 >
                   <td class="px-3 py-2 w-10" @click.stop>
                     <Checkbox
@@ -970,9 +980,17 @@ const pageNumbers = computed(() =>
     <Sheet :open="executeOpen" @update:open="executeOpen = $event">
       <SheetContent side="right" class="w-full gap-0 p-0 sm:max-w-[680px]">
         <SheetHeader class="border-b border-border pr-12">
-          <SheetTitle>{{ t.jobsPage.executeTitle }}</SheetTitle>
+          <SheetTitle>新建任务</SheetTitle>
         </SheetHeader>
-        <ExecuteJobPanel
+        <div class="space-y-3 border-b p-4">
+          <p class="text-sm font-medium">选择执行方式</p>
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" :aria-pressed="executionType === 'bk'" :class="cn('rounded-lg border p-3 text-left text-sm', executionType === 'bk' ? 'border-blue-600 bg-blue-50' : 'border-gray-200')" @click="executionType = 'bk'">BK 智能任务<br /><span class="text-xs text-gray-500">用自然语言安排手机执行</span></button>
+            <button type="button" :aria-pressed="executionType === 'script'" :class="cn('rounded-lg border p-3 text-left text-sm', executionType === 'script' ? 'border-blue-600 bg-blue-50' : 'border-gray-200')" @click="executionType = 'script'">脚本任务<br /><span class="text-xs text-gray-500">使用已有脚本和执行设置</span></button>
+          </div>
+          <button v-if="executionType === 'bk'" type="button" class="rounded-lg bg-gray-900 px-4 py-2 text-sm text-white" @click="executeOpen = false; router.push('/fleet-chat')">继续安排智能任务</button>
+        </div>
+        <ExecuteJobPanel v-if="executionType === 'script'"
           compact
           :on-cancel="() => (executeOpen = false)"
           :on-success="onExecuteSuccess"

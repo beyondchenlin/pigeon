@@ -4,7 +4,7 @@ import { Sidebar } from '@/components/dashboard/sidebar';
 import { apiRequest, ApiRequestError, formatApiError } from '@/lib/api';
 import { validateExecution, type BrowseExecution } from '@/lib/task-request.mjs';
 import { canAutoArrange } from '@/lib/fleet-auto.mjs';
-import { toHashHref } from '@/lib/hash-router';
+import { toHashHref, useHashSearchParams } from '@/lib/hash-router';
 
 type Model = { id: number; name: string; provider: string };
 type Schedule = { kind: 'now' | 'once' | 'daily' | 'weekly' | 'monthly'; at?: string; timezone?: string; weekday?: number; day?: number };
@@ -39,6 +39,12 @@ const contractError = computed(() => {
 const timezone = ref(Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai');
 const plan = ref<Plan | null>(null);
 const jobs = ref<Job[]>([]);
+const hashParams = useHashSearchParams();
+const targetJob = computed(() => {
+  const value = hashParams.value.get('job') || '';
+  return /^[1-9]\d{0,9}$/.test(value) ? value : '';
+});
+const targetJobError = ref('');
 const error = ref('');
 const note = ref('');
 const busy = ref(false);
@@ -85,7 +91,16 @@ async function toggleRuns(job: Job) {
 async function refresh() {
   try {
     const result = await apiRequest<{jobs: Job[]}>('/api/v1/ai/jobs', {cache:'no-store'});
-    jobs.value = result.data?.jobs || [];
+    const rows = result.data?.jobs || [];
+    const requested = targetJob.value;
+    if (requested && !rows.some(job => String(job.id) === requested)) {
+      try {
+        const target = await apiRequest<Job>(`/api/v1/ai/jobs/${requested}`, {cache:'no-store'});
+        if (target.data && String(target.data.id) === requested) rows.unshift(target.data);
+        targetJobError.value = '';
+      } catch { targetJobError.value = '无法读取指定任务，请检查任务是否存在以及当前账号是否有权限。'; }
+    } else targetJobError.value = '';
+    jobs.value = requested ? [...rows].sort((a, b) => Number(String(b.id) === requested) - Number(String(a.id) === requested)) : rows;
   } catch (e) { error.value = formatApiError(e, '无法读取任务'); }
 }
 
@@ -229,8 +244,10 @@ onBeforeUnmount(() => { mounted = false; if (refreshTimer) clearInterval(refresh
         </section>
         <section class="rounded-xl border border-gray-200 bg-white p-5" aria-label="任务记录">
           <div class="flex items-center justify-between"><h2 class="text-base font-semibold">任务记录</h2><button class="text-sm text-blue-700" @click="refresh">刷新</button></div>
+          <p v-if="targetJobError" role="alert" class="mt-3 text-sm text-amber-700">{{ targetJobError }}</p>
           <p v-if="!jobs.length" class="mt-5 text-sm text-gray-500">安排任务后，这里会显示各台手机的结果。</p>
           <article v-for="job in jobs" :key="job.id" class="mt-4 border-t border-gray-200 pt-4">
+            <p v-if="String(job.id) === targetJob" class="mb-1 text-sm font-medium text-blue-700">从任务列表打开的任务 #{{ job.id }}</p>
             <div class="flex flex-wrap items-start justify-between gap-2"><p class="font-medium">{{ job.goal }}</p><span class="text-sm text-gray-600">{{ stateText[job.state] || job.state }}</span></div>
             <p class="mt-1 text-sm text-gray-500">{{ scheduleText(job.schedule) }}；下次：{{ showTime(job.next_at) }}</p>
             <p v-if="job.schedule_error" class="mt-1 text-sm text-amber-700">{{ reasonText[job.schedule_error] || job.schedule_error }}</p>
