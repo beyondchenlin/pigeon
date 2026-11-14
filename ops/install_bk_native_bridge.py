@@ -142,7 +142,7 @@ def confirm_activation(user_root, source_root, *, boundary=Path('/data/local/tmp
             raise RuntimeError('installation manifest unavailable')
         manifest = json.loads(manifest_path.read_text())
         current = {'pid': data.get('guard_pid'), 'identity': data.get('guard_identity')}
-        if not guard.native_guard_ready(root) or (manifest.get('reload_needed') and current == manifest.get('prior_guard')):
+        if not guard.live_guard_ready(root) or (manifest.get('reload_needed') and current == manifest.get('prior_guard')):
             raise RuntimeError('updated guard not yet loaded')
         for destinations in FILES.values():
             for relative in destinations:

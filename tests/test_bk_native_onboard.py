@@ -37,6 +37,27 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual({'state': 'not_installed'}, onboard.provision(device, ROOT / 'ops', request_id='c' * 32))
         self.assertEqual(3, device.execute_script.call_count)
 
+    def test_not_ready_opens_app_once_then_probes_again(self):
+        device = Mock()
+        device.execute_script.side_effect = [self.reply(), self.reply({'state': 'not_ready'}),
+            self.reply(), self.reply({'state': 'connected'}),
+            self.reply({'installed': True, 'restart_required': False}),
+            self.reply({'installed': True, 'restart_required': False}), self.reply()]
+        from unittest.mock import patch
+        with patch.object(onboard.time, 'sleep'):
+            result = onboard.provision(device, ROOT / 'ops', request_id='f' * 32, start_app=True)
+        self.assertEqual({'state': 'connected'}, result)
+        self.assertEqual(1, sum('am start -n' in call.args[0] for call in device.execute_script.call_args_list))
+
+    def test_disabled_connection_remains_not_ready_after_open(self):
+        device = Mock()
+        device.execute_script.side_effect = [self.reply(), self.reply({'state': 'not_ready'}),
+            self.reply(), self.reply({'state': 'not_ready'}), self.reply()]
+        from unittest.mock import patch
+        with patch.object(onboard.time, 'sleep'):
+            result = onboard.provision(device, ROOT / 'ops', request_id='f' * 32, start_app=True)
+        self.assertEqual({'state': 'not_ready'}, result)
+
     def test_unchanged_files_do_not_imply_guard_loaded(self):
         device = Mock()
         device.execute_script.side_effect = [self.reply(), self.reply({'state': 'connected'}),

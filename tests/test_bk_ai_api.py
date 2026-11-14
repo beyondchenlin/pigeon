@@ -63,12 +63,18 @@ class PollStartupTests(unittest.TestCase):
 
 
 class NativeDiscoveryTests(AsyncHTTPTestCase):
+    def setUp(self):
+        self.busy = patch.object(api, 'native_onboarding_busy', return_value=False)
+        self.busy.start()
+        self.addCleanup(self.busy.stop)
+        super().setUp()
+
     def get_app(self):
         class Handler(api.NativeDiscoveryHandler):
             def get_login_user_device(self, domain):
                 if self.request.headers.get('X-Test-Auth') != 'owner':
                     self.throw(401, 'AUTH', 'unauthorized')
-                return SimpleNamespace(id=1), SimpleNamespace(state='offline' if domain == 'offline' else 'online')
+                return SimpleNamespace(id=1), SimpleNamespace(id=1, state='offline' if domain == 'offline' else 'online')
         return Application([(r'/api/v1/device/([a-z0-9]+)/ai/native-discovery', Handler)], ctl=None)
 
     def test_discovery_requires_authorization_and_reports_offline(self):
@@ -78,6 +84,13 @@ class NativeDiscoveryTests(AsyncHTTPTestCase):
             self.assertEqual('offline', json.loads(response.body)['data']['state'])
             call.assert_not_called()
 
+    def test_pending_onboarding_is_not_reported_as_connected(self):
+        self.busy.stop()
+        with patch.object(api, 'native_onboarding_busy', return_value=True), patch.object(api, 'call') as call:
+            response = self.fetch('/api/v1/device/phonea/ai/native-discovery', headers={'X-Test-Auth':'owner'})
+            self.assertEqual('onboarding', json.loads(response.body)['data']['state'])
+            call.assert_not_called()
+
     def test_discovery_only_returns_public_status(self):
         with patch.object(api, 'call', return_value={'http': 200, 'body': {
                 'state': 'connected', 'version': '44', 'token': 'private'}}) as call:
@@ -85,6 +98,26 @@ class NativeDiscoveryTests(AsyncHTTPTestCase):
             self.assertEqual({'state': 'connected', 'version': '44'}, json.loads(response.body)['data'])
             call.assert_called_once_with('phonea', 'GET', '/api/v1/native-discovery', discover_native=True)
 
+
+class NativeOnboardApiTests(AsyncHTTPTestCase):
+    def get_app(self):
+        class Handler(api.NativeOnboardHandler):
+            def get_login_user_device(self, domain):
+                if self.request.headers.get('X-Test-Auth') != 'owner':
+                    self.throw(401, 'AUTH', 'unauthorized')
+                return SimpleNamespace(id=1), SimpleNamespace(id=1, domain=domain)
+        return Application([(r'/api/v1/device/([a-z0-9]+)/ai/native-onboard', Handler)], ctl=None)
+
+    def test_authorized_onboarding_only(self):
+        from server import bk_native_coordinator as coordinator
+        payload=json.dumps({'request_id':str(uuid.uuid4())})
+        with patch.object(coordinator,'onboard',return_value={'state':'waiting_for_idle'}) as run:
+            self.assertEqual(401,self.fetch('/api/v1/device/phonea/ai/native-onboard',method='POST',body=payload).code)
+            run.assert_not_called()
+            response=self.fetch('/api/v1/device/phonea/ai/native-onboard',method='POST',body=payload,headers={'X-Test-Auth':'owner'})
+        self.assertEqual(200,response.code)
+        self.assertEqual('waiting_for_idle',json.loads(response.body)['data']['state'])
+        run.assert_called_once()
 
 class AiApiTests(AsyncHTTPTestCase):
     def test_native_task_binding_survives_mapping_change(self):

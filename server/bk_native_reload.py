@@ -43,6 +43,9 @@ def reserve(session, device_id, user_id, attempt_id):
             raise ValueError('reload_unconfirmed')
     if device.state != 'online' or device.controlling:
         raise ValueError('device_unavailable')
+    from .bk_native_gateway import NativeGatewayConnection
+    if session.query(NativeGatewayConnection.connection_id).filter_by(device_id=device_id).first():
+        raise ValueError('device_has_gateway_connection')
     if session.query(AiTask.id).filter(AiTask.device_id == device_id, AiTask.status.notin_(TERMINAL)).first():
         raise ValueError('device_busy')
     if session.query(Task.id).filter(Task.device_id == device_id,

@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from executor.models import Base, Device, Job, Task, User, UserDevice
 from server.bk_ai_store import AiTask, locked_device, reload_busy
 from server.bk_native_reload import NativeReload, reserve
+from server.bk_native_gateway import NativeGatewayConnection, register
 from server.bk_fleet_store import create_job, materialize_due
 from server.bk_plan import validate_plan
 
@@ -97,6 +98,36 @@ class ConcurrentCreationTests(unittest.TestCase):
             with sessions() as session:
                 self.assertEqual(session.query(NativeReload).filter_by(device_id=2).count() +
                                  session.query(AiTask).filter_by(device_id=2).count(), 1)
+            with sessions.begin() as session:
+                session.add(Device(id=3, domain='phone3', state='online'))
+                session.add(UserDevice(user_id=1, device_id=3))
+            gate = threading.Barrier(2)
+            def reload_with_viewer():
+                gate.wait(timeout=5)
+                try:
+                    with sessions.begin() as session:
+                        reserve(session, 3, 1, str(uuid.uuid4()))
+                    return True
+                except ValueError as exc:
+                    if str(exc) != 'device_has_gateway_connection': raise
+                    return False
+            def open_viewer():
+                gate.wait(timeout=5)
+                try:
+                    with sessions.begin() as session:
+                        register(session, 'phone3', str(uuid.uuid4()), 42, '123')
+                    return True
+                except ValueError as exc:
+                    if str(exc) != 'reload_in_progress': raise
+                    return False
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                reload_result = pool.submit(reload_with_viewer)
+                viewer_result = pool.submit(open_viewer)
+                outcomes = [reload_result.result(timeout=15), viewer_result.result(timeout=15)]
+            self.assertEqual(sorted(outcomes), [False, True])
+            with sessions() as session:
+                self.assertEqual(session.query(NativeReload).filter_by(device_id=3).count() +
+                                 session.query(NativeGatewayConnection).filter_by(device_id=3).count(), 1)
         finally:
             if engine:
                 engine.dispose()

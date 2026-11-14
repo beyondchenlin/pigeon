@@ -250,6 +250,24 @@ class TransportTests(unittest.TestCase):
             call.assert_not_called()
 
     @unittest.skipIf(sys.platform == 'win32', 'phone bridge locking requires Linux or Android')
+    def test_auto_refuses_unconfirmed_guard_update_without_dispatching(self):
+        with tempfile.TemporaryDirectory(prefix='bk-unconfirmed-guard-') as directory:
+            root = Path(directory) / 'bk-ai'
+            (Path(directory) / 'bk-native-bridge-install.json').write_text(json.dumps(
+                {'installed': True, 'version': 2, 'reload_needed': True}))
+            with phone.state(root) as data:
+                data.update(guard_pid=100, guard_identity='alive', manual=[],
+                            guard_protocol={'version':2, 'pid':100, 'identity':'alive'})
+            request = {'state_dir': str(root), 'info': 'auto', 'method': 'POST',
+                       'path': '/api/v1/tasks', 'body': {'goal': 'calculate', 'request_id': self.task}}
+            with patch.object(mcp, 'probe', return_value={'state': 'connected'}), \
+                 patch.object(phone, 'process_identity', return_value='alive'), \
+                 patch.object(phone, 'api') as call:
+                reply = phone.bridge(request)
+            self.assertEqual('guard_upgrade_required', reply['body']['error']['code'])
+            call.assert_not_called()
+
+    @unittest.skipIf(sys.platform == 'win32', 'phone bridge locking requires Linux or Android')
     def test_manual_takeover_stops_the_bound_native_task(self):
         with tempfile.TemporaryDirectory(prefix='bk-takeover-') as directory:
             with phone.state(directory) as data:

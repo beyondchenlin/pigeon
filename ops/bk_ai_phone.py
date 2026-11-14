@@ -73,7 +73,7 @@ def process_identity(pid):
         return None
 
 
-def native_guard_ready(root):
+def live_guard_ready(root):
     """Read the atomic guard snapshot without creating or changing files."""
     try:
         path = Path(root)
@@ -85,6 +85,25 @@ def native_guard_ready(root):
                     and process_identity(pid) == identity)
     except (OSError, ValueError, TypeError, AttributeError):
         return False
+
+
+def guard_reload_pending(root):
+    """An installed update must not use the old guard before confirmation."""
+    try:
+        manifest = Path(root).parent / 'bk-native-bridge-install.json'
+        if manifest.is_symlink():
+            return True
+        if not manifest.exists():
+            return False  # Older installations predate the managed manifest.
+        data = json.loads(manifest.read_text())
+        return not (data.get('installed') is True and data.get('version') == 2
+                    and data.get('reload_needed') is False)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return True
+
+
+def native_guard_ready(root):
+    return live_guard_ready(root) and not guard_reload_pending(root)
 
 
 def manual_owner(socket_fd):
@@ -346,6 +365,8 @@ def bridge(request):
             guard_protocol = data.get('guard_protocol')
             if automatic and guard_protocol != {'version': 2, 'pid': data.get('guard_pid'),
                                                 'identity': data.get('guard_identity')}:
+                return {'http': 409, 'body': {'error': {'code': 'guard_upgrade_required'}}}
+            if automatic and guard_reload_pending(root):
                 return {'http': 409, 'body': {'error': {'code': 'guard_upgrade_required'}}}
             if not ready or data.get('manual') or (data.get('ai') and data['ai'] != task_id):
                 return {'http': 409, 'body': {'error': {'code': 'control_busy_or_guard_unavailable'}}}

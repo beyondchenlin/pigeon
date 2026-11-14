@@ -9,9 +9,7 @@ from types import SimpleNamespace
 
 if importlib.util.find_spec('lamda') is None:
     raise unittest.SkipTest('Run transport checks in the existing PIGEON runtime')
-spec = importlib.util.spec_from_file_location('bk_ai_transport', Path(__file__).resolve().parents[1] / 'server/bk_ai_transport.py')
-transport = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(transport)
+from server import bk_ai_transport as transport
 
 
 class TransportTests(unittest.TestCase):
@@ -38,8 +36,7 @@ class TransportTests(unittest.TestCase):
     def test_shared_runtime_command_uses_phone_environment(self):
         device = MagicMock()
         device.execute_script.return_value = SimpleNamespace(stdout=b'{"http":200,"body":{}}')
-        with patch('lamda.client.Device', return_value=device), \
-             patch('grpc.intercept_channel', side_effect=lambda channel, _: channel), \
+        with patch('server.bk_device_channel.open_device', return_value=device), \
              patch.object(transport, 'mapping', return_value={'runtime_env': True, 'info': 'auto'}), \
              patch.dict(os.environ, {'API_PORT': '65000'}):
             transport.call('newdevice', 'GET', '/api/v1/native-discovery', discover_native=True)
@@ -62,7 +59,7 @@ class TransportTests(unittest.TestCase):
             return SimpleNamespace(stdout=response if response is not None else json.dumps({'http':200,'body':{}}).encode())
         device.execute_script.side_effect = execute
         config = dict(python='/runtime/python3', library='/runtime/lib', bridge='/user/bridge.py', info='/phone/info.json', state_dir='/user/state')
-        with patch('lamda.client.Device', return_value=device), patch('grpc.intercept_channel', side_effect=lambda channel, _: channel), \
+        with patch('server.bk_device_channel.open_device', return_value=device), \
              patch.object(transport, 'mapping', return_value=config), patch.dict(os.environ, {'API_PORT':'65000'}):
             if warmup_error:
                 with self.assertRaises(transport.TransportError):
@@ -99,7 +96,7 @@ class TransportTests(unittest.TestCase):
                      {'after_revision': 0, 'timeout_ms': 999},
                      {'after_revision': True, 'timeout_ms': 1000},
                      {'after_revision': 0, 'timeout_ms': 1000, 'extra': 1}):
-            with patch('lamda.client.Device') as device:
+            with patch('server.bk_device_channel.open_device') as device:
                 with self.assertRaisesRegex(transport.TransportError, 'invalid_wait'):
                     transport.call('example', 'POST', path, body)
                 device.assert_not_called()
@@ -117,7 +114,7 @@ class TransportTests(unittest.TestCase):
                 ('GET', path, {'method': 'POST', 'path': '/api/v1/tasks'}),
                 ('GET', path[:-1] + '1', None), ('GET', path[:-1] + str(768 * 1024), None),
                 ('GET', path.replace('/evidence/', '/tasks/'), None)]:
-            with self.subTest(method=method, path=target), patch('lamda.client.Device') as device:
+            with self.subTest(method=method, path=target), patch('server.bk_device_channel.open_device') as device:
                 with self.assertRaisesRegex(transport.TransportError, 'invalid_evidence_batch'):
                     transport.call('example', method, target, body)
                 device.assert_not_called()

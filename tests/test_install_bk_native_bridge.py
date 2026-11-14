@@ -53,7 +53,10 @@ class InstallTests(unittest.TestCase):
             identity = phone.process_identity(pid)
             data.update(guard_pid=pid, guard_identity=identity,
                         guard_protocol={'version': 2, 'pid': pid, 'identity': identity})
+        self.assertTrue(phone.live_guard_ready(root))
+        self.assertFalse(phone.native_guard_ready(root), 'updated files must not use the old guard')
         self.assertFalse(installer.confirm_activation(self.user, OPS, boundary=self.root, uid=2000)['restart_required'])
+        self.assertTrue(phone.native_guard_ready(root))
         (self.user / 'modules/bk_native_mcp.py').write_text('changed')
         with self.assertRaisesRegex(RuntimeError, 'file changed'):
             installer.confirm_activation(self.user, OPS, boundary=self.root, uid=2000)

@@ -101,21 +101,65 @@ const answerError = ref('');
 const stopRequests = ref<Record<string, boolean>>({});
 const nativeConnection = ref('正在检查新版连接…');
 const checkingNative = ref(false);
+const nativeOnboardingPending = ref(false);
+const nativeOnboardingKey = (id: string) => `bk-native-onboard:${id}`;
 async function checkNativeConnection() {
   if (checkingNative.value) return;
   checkingNative.value = true;
+  const target = domain.value;
   try {
-    const reply = await apiRequest<{state: string; version?: string}>(`/api/v1/device/${domain.value}/ai/native-discovery`, {cache:'no-store'});
-    const state = reply.data?.state || '';
+    const reply = await apiRequest<{state: string; version?: string}>(`/api/v1/device/${target}/ai/native-discovery`, {cache:'no-store'});
+    if (domain.value !== target) return;
+    let state = reply.data?.state || '';
+    let version = reply.data?.version || '';
     const messages: Record<string,string> = {
       connected: '新版 BK CLAW 已连接', not_installed: '未安装新版 BK CLAW',
       not_ready: '新版连接未就绪：请先打开 BK CLAW，并检查连接电脑开关',
       auth_failed: '新版连接认证失败，请检查手机连接设置', offline: '手机离线，请先恢复远控连接',
-      incompatible: '新版接口不兼容，请检查 BK CLAW 版本', guard_not_ready: '新版已连接，但接管保护未就绪，暂不能派任务'
+      incompatible: '新版接口不兼容，请检查 BK CLAW 版本', guard_not_ready: '新版已连接，但接管保护未就绪，暂不能派任务',
+      waiting_for_idle: '正在等待远控页面关闭或当前任务结束，再自动加载保护',
+      waiting_reconnect: '正在等待手机重新连接并确认保护',
+      waiting: '正在检查自动接入状态', onboarding: '正在确认接管保护',
+      gateway_unavailable: '服务器接入保护暂未就绪，无法自动加载',
+      install_unconfirmed: '保护安装状态未确认，需要管理员检查'
     };
+    const key = nativeOnboardingKey(target);
+    if (state === 'connected') {
+      sessionStorage.removeItem(key);
+      nativeOnboardingPending.value = false;
+    } else if (['not_ready', 'guard_not_ready', 'onboarding'].includes(state) ||
+               (state === 'offline' && !!sessionStorage.getItem(key))) {
+      const requestId = sessionStorage.getItem(key) || crypto.randomUUID();
+      sessionStorage.setItem(key, requestId);
+      nativeConnection.value = '正在检查并自动准备接管保护…';
+      nativeOnboardingPending.value = true;
+      const result = await apiRequest<{state: string; attempt_id?: string}>(
+        `/api/v1/device/${target}/ai/native-onboard`, {
+          method:'POST', headers:{'Content-Type':'application/json', 'X-Requested-With':'BK-Task'},
+          body:JSON.stringify({request_id:requestId}), signal:AbortSignal.timeout(60000),
+        });
+      if (domain.value !== target) return;
+      state = result.data?.state || 'waiting';
+      if (result.data?.attempt_id) sessionStorage.setItem(key, result.data.attempt_id);
+      if (state === 'connected') {
+        const confirmed = await apiRequest<{state:string; version?:string}>(`/api/v1/device/${target}/ai/native-discovery`, {cache:'no-store'});
+        if (domain.value !== target) return;
+        state = confirmed.data?.state || 'not_ready';
+        version = confirmed.data?.version || '';
+        if (state === 'connected') sessionStorage.removeItem(key);
+      } else if (['waiting_for_idle', 'not_ready', 'not_installed', 'auth_failed', 'incompatible'].includes(state)) {
+        sessionStorage.removeItem(key);
+      }
+      nativeOnboardingPending.value = ['waiting_for_idle','waiting_reconnect','waiting','onboarding'].includes(state);
+    } else {
+      nativeOnboardingPending.value = false;
+    }
     nativeConnection.value = (messages[state] || '新版连接暂时无法确认') +
-      (state === 'connected' && reply.data?.version ? `（${reply.data.version}）` : '');
-  } catch { nativeConnection.value = '新版连接暂时无法确认，请稍后重试'; }
+      (state === 'connected' && version ? `（${version}）` : '');
+  } catch {
+    nativeConnection.value = '正在核对连接状态，未确认的重载不会重复发送';
+    nativeOnboardingPending.value = !!sessionStorage.getItem(nativeOnboardingKey(target));
+  }
   finally { checkingNative.value = false; }
 }
 const stopKey = (task: Receipt) => `bk-task-stop:${domain.value}:${task.task_id}`;
@@ -249,7 +293,8 @@ onMounted(() => {
     const saved = JSON.parse(sessionStorage.getItem(key.value) || 'null');
     if (saved && /^[a-f0-9-]{36}$/.test(saved.taskId) && /^[a-f0-9-]{36}$/.test(saved.requestId)) pending.value = saved;
   } catch { /* An unreadable local receipt never causes automatic submission. */ }
-  void checkNativeConnection(); void refresh(); timer = setInterval(() => { void refresh(); }, 5000);
+  void checkNativeConnection(); void refresh(); let nativeTicks = 0;
+  timer = setInterval(() => { void refresh(); if (nativeOnboardingPending.value && ++nativeTicks >= 3) { nativeTicks = 0; void checkNativeConnection(); } }, 5000);
 });
 onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
 </script>

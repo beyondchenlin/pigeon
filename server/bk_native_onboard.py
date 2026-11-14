@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import time
 import uuid
 
 FILES = ('install_bk_native_bridge.py', 'bk_ai_phone.py', 'bk_native_mcp.py',
@@ -37,7 +38,7 @@ def _python_command(script, args):
     return 'export PYTHONDONTWRITEBYTECODE=1 LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" ' + shlex.join([script, *args])
 
 
-def provision(device, bundle_dir, *, request_id=None):
+def provision(device, bundle_dir, *, request_id=None, start_app=False):
     """Stage and validate one bundle. A live guard reload is confirmed separately."""
     bundle = Path(bundle_dir)
     files = {}
@@ -63,6 +64,15 @@ def provision(device, bundle_dir, *, request_id=None):
         cmd = ('export PYTHONDONTWRITEBYTECODE=1 LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" -c '
                + shlex.quote(probe_code) + ' ' + shlex.quote(stage))
         probe = _result(device.execute_script(cmd, timeout=15))
+        if probe.get('state') == 'not_ready' and start_app:
+            # Opening the installed app starts its normal service; it does not
+            # change the user's MCP switch or permissions. Never replay an
+            # uncertain launch and never open the app during reconciliation.
+            opened = device.execute_script(
+                'am start -n com.beyondchenlin.bk101.nativemcp/com.wangzan101.mika.ui.MainActivity', timeout=10)
+            if opened.exitstatus == 0:
+                time.sleep(2)
+                probe = _result(device.execute_script(cmd, timeout=15))
         if probe.get('state') != 'connected':
             complete = True
             return {'state': probe.get('state') if probe.get('state') in

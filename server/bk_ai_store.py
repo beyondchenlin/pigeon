@@ -97,6 +97,8 @@ def request_cancel(row, reason='user_stop'):
 def ensure_schema(engine):
     """Add only nullable receipt metadata; no existing task is rewritten."""
     AiTask.__table__.create(engine, checkfirst=True)
+    from .bk_native_gateway import NativeGatewayConnection
+    NativeGatewayConnection.__table__.create(engine, checkfirst=True)
     from .bk_native_reload import NativeReload
     NativeReload.__table__.create(engine, checkfirst=True)
     with engine.begin() as connection:

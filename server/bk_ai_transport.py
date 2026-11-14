@@ -1,6 +1,5 @@
 """Authenticated FIRERPA RPC to BK's phone-local HTTP API. No credential export."""
 import base64
-import collections
 import json
 import os
 from pathlib import Path
@@ -81,8 +80,7 @@ def wait_duration(method, path, body):
 def call(domain, method, path, body=None, *, discover_native=False, task_info=None, create_native=False):
     wait_s = wait_duration(method, path, body)
     batched_evidence = evidence_batch_request(method, path, body)
-    import grpc
-    from lamda.client import Device
+    from .bk_device_channel import open_device
     config = mapping(domain)
     if create_native:
         if method != 'POST' or path != '/api/v1/tasks' or discover_native or task_info is not None:
@@ -121,15 +119,9 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
     script_timeout = wait_s + 8 if wait_s is not None else (22 if prepare else (18 if batched_evidence else 12))
     rpc_timeout = script_timeout + 3
 
-    class Deadline(grpc.UnaryUnaryClientInterceptor):
-        def intercept_unary_unary(self, continuation, details, request):
-            Call = collections.namedtuple('Call', 'method timeout metadata credentials wait_for_ready compression')
-            return continuation(Call(details.method, rpc_timeout, details.metadata, details.credentials, False, None), request)
-
-    device = Device('127.0.0.1', port=int(os.environ['API_PORT']),
-                    certificate=str(Path('/user/certificates') / (domain + '.pem')))
-    device.channel = grpc.intercept_channel(device.channel, Deadline())
+    device = None
     try:
+        device = open_device(domain, rpc_timeout)
         if (method == 'POST' and path == '/api/v1/tasks') or discover_native:
             # FIRERPA 10.9's startup listener can suppress Android accessibility
             # until its UI driver is initialized. This read initializes the
@@ -150,4 +142,5 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
     except Exception:
         raise TransportError('connection_unknown') from None
     finally:
-        device.channel.close()
+        if device is not None:
+            device.channel.close()

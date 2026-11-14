@@ -355,12 +355,20 @@ def deliver_answer(domain, task_id, request_id, key, text):
     reconcile(task_id)
 
 
+def native_onboarding_busy(device_id):
+    with session_scope() as session:
+        return reload_busy(session, device_id)
+
+
 class NativeDiscoveryHandler(BaseHttpService):
     async def get(self, domain):
         self.set_header('Cache-Control', 'no-store')
         _, device = self.get_login_user_device(domain)
         if device.state != 'online':
             self.tell({'state': 'offline'})
+            return
+        if native_onboarding_busy(device.id):
+            self.tell({'state': 'onboarding'})
             return
         try:
             result = await asyncio.get_running_loop().run_in_executor(
@@ -533,6 +541,24 @@ class AiHandler(BaseHttpService):
         self.tell(self.lookup(domain, task_id))
 
 
+class NativeOnboardHandler(AiHandler):
+    async def post(self, domain):
+        user, _ = self.get_login_user_device(domain)
+        body = self.body()
+        if set(body) != {'request_id'} or not isinstance(body.get('request_id'), str):
+            self.throw(400, 'BK_ONBOARD', 'request_id is required')
+        from .bk_native_coordinator import onboard
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                POOL, lambda: onboard(domain, user.id, body['request_id']))
+        except ValueError as error:
+            if str(error) in ('device_not_authorized', 'attempt_not_authorized'):
+                self.throw(403, 'BK_ONBOARD', 'Device access is unavailable')
+            self.throw(400, 'BK_ONBOARD', 'Invalid request')
+        self.set_header('Cache-Control', 'no-store')
+        self.tell(result)
+
+
 def start_with_polling(http, original_start, **settings):
     # Tornado's asyncio implementation overrides IOLoop.start. Hook the actual
     # implementation only during this synchronous server startup, and schedule
@@ -581,6 +607,10 @@ def install():
         original(self, *args, **kwargs)
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/native-discovery',
                               'server.bk_ai', handler='NativeDiscoveryHandler')
+        self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/native-onboard',
+                              'server.bk_ai', handler='NativeOnboardHandler')
+        self.http.add_handler(r'/__bk_gateway', 'server.bk_native_gateway_api',
+                              handler='GatewayAdmissionHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/tasks(?:/([a-f0-9-]{36})(?:/(cancel|takeover|answer))?)?',
                               'server.bk_ai', handler='AiHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/evidence(?:/([a-f0-9-]{36})/image)?',
