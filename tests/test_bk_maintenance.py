@@ -31,6 +31,23 @@ class ModeTests(unittest.TestCase):
         mode.write_json(path,{'enabled':True,'request_id':str(uuid.uuid4())})
         self.assertTrue(mode.enabled(self.root))
 
+    def test_reused_pid_owned_by_another_app_is_not_a_monitor(self):
+        proc_root = self.root / 'proc'
+        other = proc_root / '1234'
+        other.mkdir(parents=True)
+        if other.stat().st_uid == 2000:
+            self.skipTest('test directory happens to be owned by Android shell UID')
+        (self.root / 'status.json').write_text(json.dumps({'monitor': 1234}))
+
+        class FakeProc:
+            root = proc_root
+
+            def identity(self, pid):
+                raise AssertionError('must not inspect another application process')
+
+        with patch.object(phone, 'ROOT', self.root), patch.object(phone, 'Proc', FakeProc):
+            self.assertIsNone(phone.monitor_identity())
+
     def test_termux_environment_preserves_android_boot_paths_not_service_secrets(self):
         env=phone.termux_environment({'BOOTCLASSPATH':'boot','DEX2OATBOOTCLASSPATH':'dex',
                                      '__DNTNEEDRESPAWN__':'1','TOKEN':'secret','LD_LIBRARY_PATH':'native'})

@@ -66,7 +66,14 @@ def helper_identity():
 def monitor_identity():
     try:
         saved = json.loads((ROOT/'status.json').read_text())
-        identity = Proc().identity(int(saved['monitor']))
+        pid = int(saved['monitor'])
+        proc = Proc()
+        # A saved PID can be reused by an unrelated Android app. Check its
+        # owner before reading /proc/PID/exe, which shell cannot inspect for
+        # another app. A later permission error still remains unknown.
+        if (proc.root / str(pid)).stat().st_uid != 2000:
+            return None
+        identity = proc.identity(pid)
     except (FileNotFoundError, ProcessLookupError, KeyError):
         return None
     cmd = (Path('/proc')/str(identity.pid)/'cmdline').read_bytes().split(b'\0')
