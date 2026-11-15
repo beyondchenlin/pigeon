@@ -18,6 +18,7 @@ FILES = {
     'bk_ai_guard_extension.py': ('extension/bk_ai_guard_extension.py',),
 }
 BUNDLE_HASH = '03841b518f9a1308de3af62ae2fddbf4b5c0b918fa4e4aa701c5771a720fd05f'
+BUNDLE_10_12_HASH = '86a3abc0047f4a66c1d799eda13be0ee58c4b287fccda308a5ed163f973db361'
 
 
 def digest(data):
@@ -46,7 +47,7 @@ def _install(runtime_root, user_root, source_root, *, boundary=Path('/data/local
     if any(path == boundary or not path.is_relative_to(boundary) for path in (runtime, user)):
         raise RuntimeError('runtime outside allowed boundary')
     bundle = runtime / 'lib/python3.12/site-packages/lamda/web/bundle.cpython-312.so'
-    if not bundle.is_file() or digest(bundle.read_bytes()) != BUNDLE_HASH:
+    if not bundle.is_file() or digest(bundle.read_bytes()) not in (BUNDLE_HASH, BUNDLE_10_12_HASH):
         raise RuntimeError('unverified FIRERPA runtime')
     modules, state = user / 'modules', user / 'phone-pilot'
     for path in (modules, modules / 'extension', state):

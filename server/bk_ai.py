@@ -86,6 +86,9 @@ def _apply_reply(task_id, reply, submitting=False, source='query'):
                             request_cancel(row, 'unconfirmed_phone_terminal')
                             change(row, 'unknown', 'unconfirmed_phone_terminal')
                             return
+                if (body.get('source') == 'phone_bridge' and body.get('failure_kind') == 'interrupted'
+                        and row.snapshot.get('run_id') and not body.get('run_id')):
+                    body = dict(body, run_id=row.snapshot['run_id'])
                 change(row, body['status'], snapshot=body)
                 now = time.time()
                 update_sync(row, phone_received_at=now, last_contact_at=now,

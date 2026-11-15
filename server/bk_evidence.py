@@ -3,6 +3,7 @@ import asyncio
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import os
+import re
 import threading
 import time
 from executor.models import session_scope, Device
@@ -48,13 +49,31 @@ def archive():
 
 
 def sync(domain):
+    from .bk_process import enrolled_since, sync_device, call_process
+    from .bk_ai_transport import NATIVE_INFO_BY_PACKAGE
+    since = enrolled_since(domain)
+    store = archive()
+    process_error = None
+    if since is not None:
+        with session_scope() as s:
+            rows = s.query(AiTask).join(Device, Device.id == AiTask.device_id).filter(
+                Device.domain == domain, AiTask.created >= since).order_by(AiTask.created.desc())
+            selected = [(r.id, r.snapshot['run_id'], r.status in ('done', 'failed', 'cancelled'), r.sync_meta['phone_info'])
+                        for r in rows if r.snapshot.get('run_id') and (r.sync_meta or {}).get('phone_info') in NATIVE_INFO_BY_PACKAGE.values()]
+        try:
+            sync_device(store, call_process, domain, selected)
+        except Exception as exc:
+            process_error = exc
     with session_scope() as s:
         tasks = {row.id: (bool(row.execution), row.snapshot) for row in s.query(AiTask)
                  .join(Device, Device.id == AiTask.device_id).filter(Device.domain == domain)}
     def validate(meta):
         contracted, snapshot = tasks[meta['task_id']]
         return terminal_binding(snapshot, meta) if contracted else True
-    return collect(domain, archive(), call, lambda task: task in tasks, validate_meta=validate)
+    saved = collect(domain, store, call, lambda task: task in tasks, validate_meta=validate, optional=since is not None)
+    if process_error:
+        raise process_error
+    return saved
 
 
 async def perform(domain):
@@ -104,7 +123,30 @@ class EvidenceHandler(BaseHttpService):
             ids = {r[0] for r in s.query(AiTask.id).filter_by(device_id=device.id, user_id=user.id)}
         store = archive()
         if eid is None:
-            self.tell(dict(evidence=store.list(domain, ids), sync=HEALTH.get(domain, {'state':'waiting'})))
+            from .bk_process import timeline, prepare
+            task = self.get_argument('task', '')
+            if task and task not in ids:
+                self.throw(404, 'TASK_NOT_FOUND', 'Task unavailable')
+            offset = self.get_argument('offset', '0')
+            if not re.fullmatch(r'[0-9]{1,9}', offset):
+                self.throw(400, 'INVALID_OFFSET', 'Invalid offset')
+            process = None
+            with session_scope() as s:
+                if task:
+                    t = s.get(AiTask, task)
+                    process = timeline(store, domain, task, int(offset))
+                    receipt = dict(status=t.status, requested=(t.sync_meta or {}).get('cancel_requested_at'),
+                                   received=(t.sync_meta or {}).get('phone_received_at') if t.status == 'cancelled' else None,
+                                   reason=(t.sync_meta or {}).get('cancel_reason'))
+                else:
+                    receipt = None
+                with store.connect() as db:
+                    prepare(db)
+                    archived = {r[0] for r in db.execute('SELECT task FROM run_process WHERE domain=?', (domain,))}
+                recent = [dict(id=t.id, goal=t.goal, status=t.status) for t in s.query(AiTask).filter_by(
+                    device_id=device.id, user_id=user.id).order_by(AiTask.created.desc()) if t.id in archived][:100]
+            self.tell(dict(evidence=store.list(domain, {task} if task else ids), process=process, receipt=receipt,
+                           runs=recent, sync=HEALTH.get(domain, {'state':'waiting'})))
             return
         meta = store.get(domain, eid)
         if meta is None or meta['task_id'] not in ids or meta['size'] == 0:

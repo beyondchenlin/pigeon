@@ -22,11 +22,19 @@ def install():
         return
     import lamda
     import lamda.web.bundle as bundle
-    if str(lamda.__version__) != '10.9' or hashlib.sha256(Path(bundle.__file__).read_bytes()).hexdigest() != '03841b518f9a1308de3af62ae2fddbf4b5c0b918fa4e4aa701c5771a720fd05f':
+    handlers = {
+        ('10.9', '03841b518f9a1308de3af62ae2fddbf4b5c0b918fa4e4aa701c5771a720fd05f'):
+            ('TouchInputHandler', 'RealTimeCmdHandler', 'CodeDebugeeHandler', 'DebugWebSocketHandler'),
+        ('10.12', '86a3abc0047f4a66c1d799eda13be0ee58c4b287fccda308a5ed163f973db361'):
+            ('TouchInputHandler', 'RealTimeCmdHandler', 'CodeDebugeeHandler', 'FridaGatewayHandler',
+             'WebAgentWebsocketHandler', 'NewRootTermHandler', 'NewShellTermHandler', 'SharedRootTermHandler'),
+    }.get((str(lamda.__version__), hashlib.sha256(Path(bundle.__file__).read_bytes()).hexdigest()))
+    if handlers is None:
         raise RuntimeError('Unverified native input runtime')
     root = str(Path(os.environ['USRDIR']) / 'phone-pilot/bk-ai')
-    for name in ('TouchInputHandler', 'RealTimeCmdHandler', 'CodeDebugeeHandler', 'DebugWebSocketHandler'):
-        cls = getattr(bundle, name)
+    # Resolve every handler before patching any of them.
+    classes = [(name, getattr(bundle, name)) for name in handlers]
+    for name, cls in classes:
         original_message, original_close = cls.on_message, cls.on_close
 
         async def message(self, raw, original=original_message, kind=name):

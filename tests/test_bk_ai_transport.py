@@ -29,6 +29,19 @@ class TransportTests(unittest.TestCase):
             request=json.loads(base64.b64decode(payload))
             self.assertEqual('auto',request['info'])
             self.assertEqual(transport.RELEASE_INFO,request['native_info'])
+    def test_pilot_preference_only_affects_new_task_discovery(self):
+        device = MagicMock()
+        device.execute_script.return_value = SimpleNamespace(stdout=b'{"http":200,"body":{}}')
+        config = dict(python='/runtime/python3',library='/runtime/lib',bridge='/user/bridge.py',info='auto',state_dir='/user/state',prefer_pilot_package=True)
+        with patch('server.bk_device_channel.open_device', return_value=device), patch.object(transport,'mapping',return_value=config):
+            for installed, expected in ((True, transport.NATIVE_INFO), (False, transport.NATIVE_INFO), (None, transport.RELEASE_INFO)):
+                if installed is None:
+                    transport.call('phone','GET','/api/v1/tasks/example',task_info=transport.RELEASE_INFO)
+                else:
+                    transport.call('phone','GET','/api/v1/native-discovery',discover_native=True,installed_only=installed)
+                payload = shlex.split(device.execute_script.call_args.args[0])[-1]
+                self.assertEqual(json.loads(base64.b64decode(payload))['info'], expected)
+
     def test_shared_default_configuration_and_explicit_override(self):
         common = dict(python='/runtime/python3', library='/runtime/lib', bridge='/user/bridge.py',
                       info='auto', state_dir='/user/state')

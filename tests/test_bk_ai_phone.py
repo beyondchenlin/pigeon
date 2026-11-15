@@ -29,6 +29,51 @@ class PhoneArbitrationTests(unittest.TestCase):
         self.request = dict(method='POST', path='/api/v1/tasks', body={'request_id': self.task, 'goal': 'read only'},
                             info=phone.DEFAULT_INFO.replace('bk101/', 'bk101.mcp/'), state_dir=self.root)
 
+    def test_only_verified_exit_or_uninstall_releases_native_task(self):
+        request = dict(self.request, info=phone.NATIVE_INFO)
+        query = dict(request, method='GET', path='/api/v1/tasks/' + self.task, body=None)
+        active = {'http':200,'body':{'task_id':self.task,'status':'running'}}
+        offline = {'http':502,'body':{'error':{'code':'delivery_unknown'}}}
+        token = ['boot', 1037, '982']
+        with patch.object(phone, 'native_process', return_value=token), patch.object(phone, 'api', return_value=active):
+            phone.bridge(request)
+        with phone.state(self.root) as data:
+            self.assertEqual(data['ai_process'], token)
+        with patch.object(phone, 'api', return_value=offline), patch.object(phone, 'interruption_reason', return_value=None):
+            self.assertEqual(phone.bridge(query), offline)
+        with phone.state(self.root) as data:
+            self.assertEqual(data['ai'], self.task)
+        with patch.object(phone, 'api', return_value=offline), patch.object(phone, 'interruption_reason', return_value='executor_exited'), \
+                patch.object(phone.subprocess, 'run'), patch.object(phone.time, 'time', return_value=100) as clock:
+            self.assertEqual(phone.bridge(query), offline)
+            clock.return_value = 106
+            reply = phone.bridge(query)
+        self.assertEqual(reply['body']['interruption'], 'executor_exited')
+        with phone.state(self.root) as data:
+            self.assertIsNone(data['ai'])
+            data['ai'] = str(uuid.uuid4())
+        with patch.object(phone, 'api', side_effect=AssertionError('archived task must not be replayed')):
+            self.assertEqual(phone.bridge(query), reply)
+        with phone.state(self.root) as data:
+            self.assertNotEqual(data['ai'], self.task)
+            self.assertIsNotNone(data['ai'])
+
+    def test_uninstall_needs_successful_package_manager_inventory(self):
+        package = phone.NATIVE_MCP_PACKAGE
+        from types import SimpleNamespace
+        with patch.object(phone.subprocess, 'run', return_value=SimpleNamespace(stdout='', stderr='')) as pm:
+            self.assertIsNone(phone.interruption_reason(package, None))
+            pm.return_value.stdout = 'package:android\npackage:' + package + '\n'
+            self.assertIsNone(phone.interruption_reason(package, None))
+            pm.return_value.stdout = 'package:android\n'
+            self.assertEqual(phone.interruption_reason(package, None), 'package_uninstalled')
+        with phone.state(self.root) as data:
+            data.update(ai=self.task, ai_info=phone.NATIVE_INFO)
+        query = dict(self.request, info=phone.NATIVE_INFO, method='GET', path='/api/v1/tasks/' + self.task, body=None)
+        with patch.object(phone, 'api', return_value={'http':409,'body':{}}), patch.object(phone,'native_process',return_value=None), \
+                patch.object(phone,'interruption_reason',return_value='package_uninstalled'):
+            self.assertEqual(phone.bridge(query)['body']['interruption'], 'package_uninstalled')
+
     def test_unknown_submission_is_not_replayed(self):
         with patch.object(phone, 'api', return_value={'http': 502, 'body': {}}) as api:
             phone.bridge(self.request)

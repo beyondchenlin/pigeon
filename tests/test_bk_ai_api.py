@@ -392,6 +392,24 @@ class AiApiTests(AsyncHTTPTestCase):
         with patch.object(api, 'call', return_value={'http': 404, 'body': {}}):
             self.assertEqual(self.request(suffix='/' + task_id)[1]['data']['status'], 'unknown')
 
+    def test_verified_interruption_keeps_old_run_and_frees_device(self):
+        _, (_, result) = self.submit()
+        task_id = result['data']['task_id']
+        run_id = '20261115-232500-test01'
+        running = {'task_id': task_id, 'status': 'running', 'run_id': run_id}
+        api.apply_reply(task_id, {'http': 200, 'body': running})
+        receipt = {'task_id': task_id, 'status': 'failed', 'source': 'phone_bridge',
+                   'failure_kind': 'interrupted', 'interruption': 'executor_exited',
+                   'verified_at_ms': 12345}
+        api.apply_reply(task_id, {'http': 200, 'body': receipt})
+        api.apply_reply(task_id, {'http': 200, 'body': running})
+        with self.sessions() as session:
+            row = session.get(AiTask, task_id)
+            self.assertEqual(row.status, 'failed')
+            self.assertEqual(row.snapshot, dict(receipt, run_id=run_id))
+            self.assertIsNone(active(session, row.device_id))
+        self.assertEqual(self.submit()[1][0], 202)
+
     def test_cancel_observes_terminal(self):
         _, (_, result) = self.submit()
         task_id = result['data']['task_id']

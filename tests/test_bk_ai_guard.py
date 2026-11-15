@@ -42,6 +42,33 @@ class GuardTests(unittest.IsolatedAsyncioTestCase):
             enter.assert_not_called()
         self.assertEqual(len(self.events), 3)
 
+    async def test_1012_control_handlers_acquire_manual_lease(self):
+        names = ('TouchInputHandler', 'RealTimeCmdHandler', 'CodeDebugeeHandler',
+                 'FridaGatewayHandler', 'WebAgentWebsocketHandler', 'NewRootTermHandler',
+                 'NewShellTermHandler', 'SharedRootTermHandler')
+        base = type('Handler', (), {
+            'on_message': lambda self, raw: None,
+            'on_close': lambda self: None,
+        })
+        for name in names:
+            setattr(self.bundle, name, type(name, (base,), {}))
+        sys.modules['lamda'].__version__ = '10.12'
+        self.guard.INSTALLED = False
+        with patch.object(self.guard, 'activate_guard'), patch.dict('os.environ', {'USRDIR': '/unused'}), \
+             patch.object(self.guard.hashlib, 'sha256', return_value=types.SimpleNamespace(
+                 hexdigest=lambda: '86a3abc0047f4a66c1d799eda13be0ee58c4b287fccda308a5ed163f973db361')):
+            self.guard.install()
+        for name in names:
+            handler = getattr(self.bundle, name)()
+            handler.ws_connection = types.SimpleNamespace(
+                stream=types.SimpleNamespace(socket=types.SimpleNamespace(fileno=lambda: 42),
+                                             closed=lambda: False))
+            with patch.object(self.guard, 'enter_manual', return_value='claim') as enter, \
+                 patch.object(self.guard, 'leave_manual'):
+                await handler.on_message('input')
+                enter.assert_called_once()
+                handler.on_close()
+
     async def test_input_waits_for_confirmed_stop_and_release_on_close(self):
         handler = self.bundle.TouchInputHandler()
         def enter(*args, **kwargs):

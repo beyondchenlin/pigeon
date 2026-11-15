@@ -74,8 +74,10 @@ def mapping(domain):
         config = configurations.get(domain, configurations.get('_default'))
         if not isinstance(config, dict):
             raise ValueError('missing configuration')
+        if type(config.get('prefer_pilot_package', False)) is not bool:
+            raise ValueError('invalid pilot preference')
         if config.get('runtime_env') is True:
-            if set(config) - {'runtime_env', 'info', 'prepare_unsecured'} or config.get('info') != 'auto':
+            if set(config) - {'runtime_env', 'info', 'prepare_unsecured', 'prefer_pilot_package'} or config.get('info') != 'auto':
                 raise ValueError('invalid runtime configuration')
             if type(config.get('prepare_unsecured', False)) is not bool:
                 raise ValueError('invalid preparation flag')
@@ -126,7 +128,8 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
     if discover_native:
         if method != 'GET' or path != '/api/v1/native-discovery' or body is not None:
             raise TransportError('invalid_discovery')
-        config = dict(config, info='auto' if release_package_enabled(domain) else NATIVE_INFO)
+        default_info = 'auto' if release_package_enabled(domain) else NATIVE_INFO
+        config = dict(config, info=NATIVE_INFO if config.get('prefer_pilot_package') else default_info)
     prepare = method == 'POST' and path == '/api/v1/tasks' and config.get('prepare_unsecured', False)
     request = dict(method=method, path=path, body=body, info=config['info'], prepare_unsecured=prepare)
     if installed_only:

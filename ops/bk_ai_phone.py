@@ -59,7 +59,7 @@ def lease_info(data, supplied=None):
 
 def release_ai(data):
     data['ai'] = None
-    for key in ('ai_info', 'ai_signature', 'ai_execution', 'answer_attempts'):
+    for key in ('ai_info', 'ai_signature', 'ai_execution', 'answer_attempts', 'ai_process', 'ai_recheck_at'):
         data.pop(key, None)
 
 
@@ -73,6 +73,59 @@ def process_identity(pid):
         return Path('/proc/%s/stat' % pid).read_text().rsplit(')', 1)[1].split()[19]
     except (OSError, IndexError):
         return None
+
+
+def native_process(package):
+    """Identify this Android app instance; a frozen process keeps the same identity."""
+    try:
+        pids = subprocess.check_output(['pidof', package], timeout=2, text=True).split()
+        if len(pids) != 1 or not pids[0].isdigit():
+            return None
+        pid = int(pids[0])
+        proc = Path('/proc') / str(pid)
+        if proc.joinpath('cmdline').read_bytes().split(b'\0', 1)[0] != package.encode():
+            return None
+        start = process_identity(pid)
+        if start:
+            return [Path('/proc/sys/kernel/random/boot_id').read_text().strip(), pid, start]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def interruption_reason(package, witness):
+    """Only affirmative OS evidence may end a native task without its own receipt."""
+    try:
+        exited = False
+        if witness:
+            boot, pid, start = witness
+            exited = Path('/proc/sys/kernel/random/boot_id').read_text().strip() != boot
+            if not exited:
+                try:
+                    current = (Path('/proc') / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
+                    exited = current != start
+                except (FileNotFoundError, ProcessLookupError):
+                    exited = True
+            if not exited:
+                return None
+        result = subprocess.run(['pm', 'list', 'packages', '--user', '0'], check=True,
+                                capture_output=True, timeout=3, text=True)
+        packages = result.stdout.splitlines()
+        if not result.stderr.strip() and 'package:android' in packages and 'package:' + package not in packages:
+            return 'package_uninstalled'
+        if exited:
+            return 'executor_exited'
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        pass
+    return None
+
+
+def interrupted_reply(task, record):
+    reason = ('原执行应用已卸载，任务中断。' if record['reason'] == 'package_uninstalled'
+              else '原执行进程已退出，任务中断。')
+    return {'http': 200, 'body': {'task_id': task, 'status': 'failed', 'failure_kind': 'interrupted',
+            'reason': reason, 'source': 'phone_bridge', 'interruption': record['reason'],
+            'verified_at_ms': record['verified_at_ms']}}
 
 
 def live_guard_ready(root):
@@ -419,6 +472,9 @@ def bridge(request):
                         return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
                     # A durable binding means creation may already have been
                     # attempted; never re-submit after an uncertain outcome.
+                    interrupted = data.get('interruptions', {}).get(task_id)
+                    if interrupted and interrupted['info'] == info:
+                        return interrupted_reply(task_id, interrupted)
                     return api(info, 'GET', '/api/v1/tasks/' + task_id)
             ready = data.get('guard_identity') and process_identity(data.get('guard_pid')) == data['guard_identity']
             guard_protocol = data.get('guard_protocol')
@@ -466,22 +522,69 @@ def bridge(request):
                 # ambiguous execution. A later deliberate request may try again.
                 release_ai(data)
                 return {'http': 409, 'body': {'error': {'code': 'device_not_ready'}}}
+            package = INFO_PACKAGES[info]
+            witness = native_process(package) if package in NATIVE_MCP_PACKAGES else None
             reply = api(info, method, path, body)
+            if (witness and isinstance(reply.get('body'), dict) and reply['body'].get('task_id') == task_id
+                    and reply['http'] in (200, 201) and native_process(package) == witness):
+                data['ai_process'] = witness
             terminal = terminal_receipt(reply, task_id, data.get('ai_execution'))
             if terminal or reply['http'] in (400, 401, 403, 409, 422, 429):
                 release_ai(data)
             return reply
     requested = re.fullmatch(r'/api/v1/tasks/([a-f0-9-]{36})(?:/(?:cancel|answer|wait))?', path)
     reservation = None
+    lookup = requested and method == 'GET' and path == '/api/v1/tasks/' + requested.group(1)
+    package = INFO_PACKAGES[info]
+    native_lookup = lookup and package in NATIVE_MCP_PACKAGES
+    witness = None
     if requested:
+        task_id = requested.group(1)
         with state(root) as data:
-            if data.get('ai') == requested.group(1):
+            archived = data.get('interruptions', {}).get(task_id)
+            if native_lookup and archived and archived['info'] == info:
+                return interrupted_reply(task_id, archived)
+            if data.get('ai') == task_id:
                 try:
                     lease_info(data, info)
                 except ValueError:
                     return {'http': 409, 'body': {'error': {'code': 'conflict'}}}
                 reservation = lease_key(data)
+                witness = data.get('ai_process')
+    # Older reservations can acquire an identity from a successful status read.
+    sample = native_process(package) if native_lookup and reservation and not witness else None
     reply = api(info, method, path, body)
+    if native_lookup and reservation and not terminal_receipt(reply, task_id):
+        body = reply.get('body') or {}
+        known = reply['http'] == 200 and isinstance(body, dict) and body.get('task_id') == task_id
+        if known and sample and native_process(package) == sample:
+            with state(root) as data:
+                if lease_key(data) == reservation and not data.get('ai_process'):
+                    data['ai_process'] = sample
+        elif not known:
+            reason = interruption_reason(package, witness)
+            with state(root) as data:
+                if lease_key(data) == reservation and not data.get('ai_execution'):
+                    # After a crash, give BK one chance to return the saved outcome (it
+                    # may have finished just before dying). Never resubmit the task.
+                    first_check = not data.get('ai_recheck_at')
+                    if reason == 'package_uninstalled' or (reason == 'executor_exited' and not first_check
+                            and time.time() >= data['ai_recheck_at']):
+                        record = dict(info=info, reason=reason, verified_at_ms=time.time_ns() // 1_000_000)
+                        data.setdefault('interruptions', {})[task_id] = record
+                        release_ai(data)
+                        return interrupted_reply(task_id, record)
+                    if (reason or not witness) and time.time() >= data.get('ai_recheck_at', 0):
+                        # Pre-upgrade tasks may lack a process identity. Let BK recover its own
+                        # durable receipt only when Android confirms no such process is running.
+                        data['ai_recheck_at'] = time.time() + (5 if reason else 60)
+                        try:
+                            pid = subprocess.run(['pidof', package], timeout=2, capture_output=True)
+                            if pid.returncode == 1 and not pid.stdout and not pid.stderr:
+                                subprocess.run(['am','start','-n',package+'/com.wangzan101.mika.ui.MainActivity'],
+                                               timeout=3, capture_output=True)
+                        except (OSError, subprocess.SubprocessError):
+                            pass
     if method == 'GET' and path == '/api/v1/evidence' and reply.get('http') == 200:
         # Authenticate through the normal phone API first. The capability is
         # outside its body, so a phone-supplied manifest field cannot enable it.

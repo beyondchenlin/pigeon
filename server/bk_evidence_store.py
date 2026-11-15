@@ -170,9 +170,13 @@ def terminal_binding(snapshot, meta):
     return True
 
 
-def collect(domain, archive, call, owns_task, limit=4, validate_meta=None):
+def collect(domain, archive, call, owns_task, limit=4, validate_meta=None, optional=False):
     """At-least-once evidence transfer; this function has no task submission API."""
     reply = call(domain, 'GET', '/api/v1/evidence')
+    # The native bridge accepts task routes only and rejects the legacy manifest.
+    unsupported = reply['http'] == 400 and (reply.get('body') or {}).get('error') == {'code': 'invalid_argument'}
+    if optional and (reply['http'] in (404, 405) or unsupported):
+        return []
     if reply['http'] != 200:
         raise ValueError('manifest_unavailable')
     records = reply['body']['evidence']
