@@ -6,6 +6,7 @@ import { fitDisplay } from '@/lib/mobile-layout';
 import { phoneFrame, pollFrames } from '@/lib/phone-frame';
 
 const props = defineProps<{ deviceId: string; online: boolean; paused: boolean; pending?: boolean }>();
+const emit = defineEmits<{ dimensions: [width: number, height: number] }>();
 const { t } = useTranslation();
 const host = ref<HTMLDivElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -51,6 +52,7 @@ function connect() {
   cleanup = pollFrames(signal => phoneFrame(props.deviceId, 240, signal), image => {
     surface.width = image.width; surface.height = image.height;
     frameSize.value = { width: image.width, height: image.height };
+    emit("dimensions", image.width, image.height);
     context.drawImage(image, 0, 0); frames.value++; hasFrame.value = true;
     state.value = "live"; attempts = 0;
   }, () => { state.value = "reconnecting"; attempts++; }, 1800);

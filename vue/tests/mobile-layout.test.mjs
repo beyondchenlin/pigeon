@@ -4,7 +4,7 @@ import { fitDisplay, galleryMediaHeight } from '../src/lib/mobile-layout.ts';
 import { writePhoneText } from '../src/lib/phone-input.ts';
 
 test('full phone frames fit portrait, landscape and unusual brands without cropping or stretching',()=>{
- for(const [w,h] of [[540,1194],[1080,1920],[2400,1080],[720,1600]])for(const [aw,ah] of [[390,844],[320,568],[844,390],[190,240]]){
+ for(const [w,h] of [[540,1194],[1080,2388],[1080,1920],[2400,1080],[720,1600]])for(const [aw,ah] of [[390,844],[320,568],[844,390],[190,240]]){
   const r=fitDisplay(w,h,aw,ah);assert.ok(r.width<=aw+.001&&r.height<=ah+.001);assert.ok(Math.abs(r.width/r.height-w/h)<.00001);
  }
  assert.deepEqual(fitDisplay(0,0,390,844),{width:0,height:0});

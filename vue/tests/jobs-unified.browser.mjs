@@ -12,6 +12,8 @@ const chrome = process.env.CHROME_BIN || ['C:\\Program Files\\Google\\Chrome\\Ap
 assert.ok(chrome && existsSync(join(dist, 'index.html')));
 const calls = [];
 const chatRequests = [];
+const receiptId = '12345678-1234-4123-8123-123456789abc';
+const phoneReceipt = {task_id:receiptId,request_id:receiptId,goal:'本机旧任务',status:'running',created_at:Date.now()/1000,updated_at:Date.now()/1000,result:{}};
 let createdJob = null;
 const legacy = {id: 1, name:'旧脚本任务', mode:'loop', state:'running'};
 const smart = {id: 7, name:'智能任务七', mode:'bk_managed', state:'bk_running'};
@@ -24,7 +26,10 @@ const server = createServer(async(req, res) => {
     const payload = body ? JSON.parse(body) : null;
     calls.push({path:url.pathname, method:req.method, filter:url.searchParams.get('filter'), body:payload});
     let data = {};
-    if (url.pathname === '/api/v1/job') data = {data:[legacy, smart], total:2};
+    if (url.pathname === '/api/v1/device/phonea/ai/tasks' && req.method === 'GET') data = {tasks:[phoneReceipt]};
+    else if (url.pathname === `/api/v1/device/phonea/ai/tasks/${receiptId}/cancel`) {phoneReceipt.cancel_requested=true; data=phoneReceipt;}
+    else if (url.pathname === `/api/v1/device/phonea/ai/tasks/${receiptId}`) data=phoneReceipt;
+    else if (url.pathname === '/api/v1/job') data = {data:[legacy, smart], total:2};
     else if (url.pathname === '/api/v1/job/status') data = {running:1, paused:0, success:0, failed:0, timeout:0};
     else if (url.pathname === '/api/v1/ai/jobs-summary') data = {running:1, paused:0};
     else if (url.pathname === '/api/v1/ai/jobs' && req.method === 'POST') {createdJob = {...job,id:8,goal:payload.plan.goal};data=createdJob;}
@@ -35,7 +40,7 @@ const server = createServer(async(req, res) => {
     else if (url.pathname.startsWith('/api/v1/ai/chat/drafts/') && chatRequests.length) data = {id:chatRequests[0].draft_id,message:chatRequests[0].message,model_id:1,timezone:chatRequests[0].timezone,state:'clarify',question:'好的，要用哪台手机执行？'};
     else if (url.pathname === '/api/v1/ai/chat/plan') {
       chatRequests.push(payload);
-      data=payload.selected_target ? {draft_id:payload.draft_id,plan:{goal:'搜索咖啡探店并截图',target:payload.selected_target,devices:['phonea'],group_id:null,schedule:{kind:'now'},membership:'snapshot',missed:'skip'}} : {draft_id:payload.draft_id,clarification:'好的，要用哪台手机执行？'};
+      data=payload.message.includes('错误设备') ? {draft_id:payload.draft_id,plan:{goal:'错误目标',target:{kind:'device',name:'phoneb'},devices:['phoneb'],schedule:{kind:'now'},membership:'snapshot',missed:'skip'}} : payload.selected_target ? {draft_id:payload.draft_id,plan:{goal:'搜索咖啡探店并截图',target:payload.selected_target,devices:['phonea'],group_id:null,schedule:{kind:'now'},membership:'snapshot',missed:'skip'}} : {draft_id:payload.draft_id,clarification:'好的，要用哪台手机执行？'};
     }
     res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify({status:0,data})); return;
   }
@@ -123,6 +128,7 @@ try {
   assert.equal(calls.filter(c=>c.path==='/api/v1/ai/jobs'&&c.method==='POST').length,1);
   assert.equal(calls.find(c=>c.path==='/api/v1/ai/jobs'&&c.method==='POST').body.request_id,chatRequests[0].draft_id);
   await evalJs('(()=>{const e=document.querySelector("textarea");e.value="每天检查设备状态";e.dispatchEvent(new Event("input",{bubbles:true}))})()');
+  await waitFor('[...document.querySelectorAll("button")].some(x=>x.textContent.trim()==="发送" && !x.disabled)');
   await click('发送');await waitFor('[...document.querySelectorAll("button")].some(x=>x.textContent.trim()==="分组")');
   await click('分组');await waitFor(has('一组'));
   await evalJs('[...document.querySelectorAll("button")].find(x=>x.textContent.includes("一组") && x.textContent.includes("1 台")).click()');
@@ -131,6 +137,21 @@ try {
   assert.equal(chatRequests[2].draft_id,chatRequests[3].draft_id);
   assert.deepEqual(chatRequests[3].selected_target,{kind:'group',name:'一组'});
   assert.equal(calls.filter(c=>c.path==='/api/v1/ai/jobs'&&c.method==='POST').length,1);
+  await call('Page.navigate',{url:base+'/#/ai/phonea'});await waitFor(has('当前设备：phonea'));await waitFor(has('本机旧任务'));
+  assert.ok(await evalJs(has('已选择设备 phonea')));
+  await evalJs('(()=>{const e=document.querySelector("textarea");e.value="检查屏幕状态";e.dispatchEvent(new Event("input",{bubbles:true}))})()');
+  await click('发送');await waitFor(has('核对任务安排'));
+  assert.deepEqual(chatRequests.at(-1).selected_target,{kind:'device',name:'phonea'});
+  assert.ok(chatRequests.at(-1).message.includes('目标设备：phonea'));
+  assert.equal(calls.filter(c=>c.path==='/api/v1/ai/jobs'&&c.method==='POST').length,1);
+  await evalJs('(()=>{const e=document.querySelector("textarea");e.value="错误设备";e.dispatchEvent(new Event("input",{bubbles:true}))})()');
+  await click('发送');await waitFor(has('任务目标与当前设备不一致'));
+  assert.equal(calls.filter(c=>c.path==='/api/v1/ai/jobs'&&c.method==='POST').length,1);
+  await evalJs('[...document.querySelectorAll("aside button")].find(x=>x.textContent.includes("本机旧任务")).click()');
+  await waitFor('[...document.querySelectorAll("[role=dialog]")].some(x=>x.textContent.includes("本机旧任务"))');
+  assert.ok(await evalJs('[...document.querySelectorAll("[role=dialog] a")].some(x=>x.getAttribute("href").includes("/evidence/phonea?task="))'));
+  await click('停止任务');await waitFor(has('停止待确认'));
+  assert.equal(calls.filter(c=>c.path===`/api/v1/device/phonea/ai/tasks/${receiptId}/cancel`&&c.method==='POST').length,1);
   if (process.argv[3]) {
     const shot = await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
     await writeFile(resolve(process.argv[3]),Buffer.from(shot.data,'base64'));

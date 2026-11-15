@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play, Maximize, Minimize, MessageSquare, MoreHorizontal } from 'lucide-vue-next';
+import { ArrowLeft, Circle, Square, RotateCw, Power, Pause, Play, Maximize, Minimize, MoreHorizontal, LoaderCircle, WifiOff } from 'lucide-vue-next';
 import { deviceSocket } from '@/lib/device-channel';
 import { startPhoneVideo, type VideoMode } from '@/lib/phone-video';
 import { androidKey, createPhoneInput, type PhoneRequest } from '@/lib/phone-input';
@@ -12,7 +12,7 @@ import { phoneFrame } from '@/lib/phone-frame';
 import { type VideoPreference, type VideoProfile } from '@/lib/video-policy';
 
 const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean; videoPreference?: VideoPreference }>();
-const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string]; 'hide-tools': []; compose: []; tools: [] }>();
+const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string]; compose: []; tools: [] }>();
 const canvas = ref<HTMLCanvasElement>();
 const video = ref<HTMLVideoElement>();
 // Diagnostic rollback without changing the controls or the device service.
@@ -64,6 +64,12 @@ const canvasStyle = computed(() => {
   const size = fitDisplay(screenSize.value.width, screenSize.value.height, viewportSize.value.width, viewportSize.value.height);
   return { width: `${size.width}px`, height: `${size.height}px` };
 });
+const navigationStyle = computed(() => {
+  const size = fitDisplay(screenSize.value.width, screenSize.value.height, viewportSize.value.width, viewportSize.value.height);
+  return { '--phone-nav-top': `${(viewportSize.value.height + size.height) / 2 + 8}px`,
+    '--phone-screen-width': `${size.width}px`,
+    '--phone-nav-width': `${Math.min(Math.max(size.width + 12, 200), viewportSize.value.width + 24)}px` };
+});
 const enabled = computed(() => props.online && visible.value && !paused.value);
 let dispose: ReturnType<typeof startPhoneVideo> | undefined;
 let touch: ReturnType<typeof createPhoneTouch> | undefined;
@@ -93,7 +99,7 @@ function start() {
   const own = generation;
   let count = 0, measured = performance.now();
   const valid = () => own === generation && enabled.value;
-  touch = createPhoneTouch({ url: deviceSocket(props.deviceId, '/ws/screen/touch'), lazy: true,
+  touch = createPhoneTouch({ url: deviceSocket(props.deviceId, '/ws/screen/touch'),
     ready: (ready, size) => { if (valid()) { touchReady.value = ready; if (size) dimensions = size; } },
     lost: () => { cancelAnimationFrame(moveRaf); moveRaf = 0; lastMove = undefined; pointer = null; },
     log: message => { if (valid()) emit('log', message); },
@@ -137,13 +143,10 @@ function send(action: TouchPayload['action'], event?: PointerEvent) {
 }
 function down(e: PointerEvent) {
   if (e.button !== 0 || pointer !== null) return;
-  // The first tap is a local UI gesture only. Never forward it into an app.
-  if (props.immersive && props.controlsVisible) { emit('hide-tools'); return; }
   if (props.textBusy) return;
   if (input.busy) { input.flush(); emit('log', '文字正在写入手机，请稍后再点击'); return; }
   if (!touchReady.value && touch && state.value === 'live') {
-    touch.activate();
-    emit('log', '正在准备触控，请连接后再次点击');
+    emit('log', '正在连接触控，请连接后再操作');
     return;
   }
   if (send('down', e)) { keyboard.value?.focus({ preventScroll: true }); pointer = e.pointerId; canvas.value?.setPointerCapture(e.pointerId); }
@@ -199,7 +202,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 </script>
 
 <template>
-  <div ref="panel" class="phone-control overflow-hidden rounded-lg border border-border bg-background" :class="{ immersive, 'controls-hidden': immersive && !controlsVisible }">
+  <div ref="panel" class="phone-control overflow-hidden rounded-lg border border-border bg-background" :style="navigationStyle" :class="{ immersive, 'controls-hidden': immersive && !controlsVisible }">
     <div class="phone-heading flex items-center justify-between gap-2 border-b px-3 text-xs">
       <span class="font-semibold">实时画面</span>
       <div class="flex items-center gap-2"><span class="mr-1 text-muted-foreground">{{ mode === 'webrtc' ? 'WebRTC' : mode === 'h264' ? 'H.264' : '兼容模式' }}</span>
@@ -211,16 +214,17 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
       <video ref="video" :style="canvasStyle" class="rtc-video" :class="{ 'rtc-visible': nativeVideo && mode === 'webrtc' && state === 'live' }" autoplay muted playsinline disablepictureinpicture aria-hidden="true" />
       <canvas ref="canvas" :style="canvasStyle" :class="{ 'rtc-input': nativeVideo && mode === 'webrtc' && state === 'live', 'detail-frame':detailFrame }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
       <textarea ref="keyboard" class="phone-keyboard" aria-label="手机文字输入" autocomplete="off" autocapitalize="off" :spellcheck="false" inputmode="none" @keydown="keyboardDown" @input="inputText" @compositionstart="composing = true" @compositionend="composing = false; inputText()" @paste="paste" @blur="blurInput" />
-      <div v-if="state !== 'live'" class="absolute inset-0 flex items-center justify-center bg-black/75 px-4 text-center text-sm text-white">{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</div>
+      <div v-if="state === 'live' && !touchReady" role="status" class="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">正在连接触控，请稍候…</div>
+      <div v-if="state !== 'live'" role="status" class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#f2f5f3] px-4 text-center text-sm text-[#667b6e]"><WifiOff v-if="!online || state === 'reconnecting'" class="h-5 w-5" /><LoaderCircle v-else-if="!paused && visible" class="h-5 w-5 animate-spin motion-reduce:animate-none" /><span>{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</span></div>
     </div>
     <div class="phone-navigation border-t" role="group" aria-label="手机操作">
       <Button variant="ghost" class="nav-action" aria-label="返回手机上一页" :disabled="!commandReady || textBusy" @click="key(4)"><ArrowLeft class="h-4 w-4" /><span>返回</span></Button>
       <Button variant="ghost" class="nav-action" aria-label="手机主页" :disabled="!commandReady || textBusy" @click="key(3)"><Circle class="h-4 w-4" /><span>主页</span></Button>
       <Button variant="ghost" class="nav-action" aria-label="手机最近任务" :disabled="!commandReady || textBusy" @click="key(187)"><Square class="h-4 w-4" /><span>最近任务</span></Button>
-      <template v-if="immersive"><Button variant="ghost" class="nav-action text-orange-600" aria-label="打开文字输入" :disabled="textBusy" @click="emit('compose')"><MessageSquare class="h-4 w-4" /><span>文字输入</span></Button><Button variant="ghost" class="nav-action" aria-label="打开远控工具" @click="emit('tools')"><MoreHorizontal class="h-4 w-4" /><span>更多</span></Button></template>
+      <template v-if="immersive"><Button variant="ghost" class="nav-action" aria-label="打开远控工具" @click="emit('tools')"><MoreHorizontal class="h-4 w-4" /><span>更多</span></Button></template>
       <template v-else><Button variant="ghost" class="nav-action" aria-label="唤醒手机" :disabled="!commandReady" @click="emit('command', 'device/wakeup', [])"><Power class="h-4 w-4" /><span>唤醒</span></Button><Button variant="ghost" class="nav-action" aria-label="重连画面" @click="reconnect"><RotateCw class="h-4 w-4" /><span>重连</span></Button></template>
     </div>
-    <p class="phone-hint text-center text-[11px] text-muted-foreground">{{ touchReady ? '点击或拖动手机画面进行操作' : '点击画面准备触控，连接后再次点击操作' }}</p>
+    <p class="phone-hint text-center text-[11px] text-muted-foreground">{{ touchReady ? '点击或拖动手机画面进行操作' : '正在连接触控，请稍候' }}</p>
     <p v-if="fullscreenError" role="alert" class="px-3 pb-2 text-xs text-amber-700">{{ fullscreenError }}</p>
     <div class="phone-status border-t text-muted-foreground"><span>{{ commandReady ? '控制通道已连接' : '控制通道未连接' }}</span><span title="浏览器最近两秒实际绘制的帧数，静止画面可能为 0；不是请求帧率">帧率 {{ state === 'live' ? `${fps} FPS` : '—' }}</span><span title="WebRTC 媒体通道往返时间，不是点击到画面变化的端到端延迟">媒体 RTT {{ mediaRtt == null ? '—' : `${mediaRtt} ms` }}</span></div>
   </div>
@@ -249,5 +253,17 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 .immersive .phone-heading,.immersive .phone-hint,.immersive .phone-status{display:none}
 .immersive .screen-viewport{padding:0}
 .immersive .phone-navigation{position:absolute;z-index:20;bottom:max(10px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);width:calc(100% - 20px);max-width:440px;padding:4px;border:1px solid var(--border);background:color-mix(in srgb,var(--background) 96%,transparent);backdrop-filter:blur(10px);border-radius:10px;box-shadow:0 2px 12px #00000010}
+.immersive .phone-navigation{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:767px){.immersive .phone-navigation{width:min(max(var(--phone-screen-width), 200px), calc(100% - 12px));max-width:none}}
 .immersive.controls-hidden .phone-navigation{display:none}
+@media(min-width:768px){
+ .phone-control.immersive{background:#f5f7f6}
+ .immersive:not(.controls-hidden) .screen-viewport{flex:none;height:calc(100% - 68px);background:transparent;box-sizing:border-box;padding:12px}
+  .immersive:not(.controls-hidden) .screen-viewport[data-control-state="live"] > canvas,
+  .immersive:not(.controls-hidden) .rtc-video.rtc-visible {
+    border-radius:14px;
+    box-shadow:0 0 0 6px #101417,0 0 0 7px #10141724,0 8px 22px #10141726;
+  }
+ .immersive:not(.controls-hidden) .phone-navigation{top:calc(var(--phone-nav-top) + 12px);bottom:auto;width:var(--phone-nav-width);max-width:none}
+}
 </style>

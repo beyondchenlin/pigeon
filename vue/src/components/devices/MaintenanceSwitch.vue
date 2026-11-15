@@ -76,8 +76,8 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
 </script>
 
 <template>
-  <fieldset class="space-y-3 rounded border p-3" aria-label="维护模式设置">
-    <legend class="px-1 text-sm font-medium">维护模式</legend>
+  <fieldset class="maintenance-card space-y-3" aria-label="维护模式设置">
+    <legend class="px-1 text-[13px] font-semibold">维护模式</legend>
     <div class="flex items-center justify-between gap-3">
       <p class="text-sm" role="status">
         {{ changing || mode?.effective === 'changing' ? '正在切换，等待确认…' : mode?.effective === 'on' ? '已开启' : mode?.effective === 'off' ? '已关闭 · 日常模式' : loading ? '正在读取…' : '状态未确认' }}
@@ -95,3 +95,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer); controller?.abort(
     <Button v-if="!changing && !loading && (!mode || mode.effective === 'unknown')" variant="outline" @click="setMode(false)">请求关闭全部维护</Button>
   </fieldset>
 </template>
+
+<style scoped>
+.maintenance-card{min-width:0;border:1px solid var(--border);border-radius:9px;background:var(--background);padding:14px}.maintenance-card p{line-height:1.6}.maintenance-card button{border-radius:7px;font-size:12px}
+</style>

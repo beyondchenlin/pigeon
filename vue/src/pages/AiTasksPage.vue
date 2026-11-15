@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { Sidebar } from '@/components/dashboard/sidebar';
 import { apiRequest, formatApiError, ApiRequestError } from '@/lib/api';
 import { useHashPathname, useHashSearchParams, toHashHref } from '@/lib/hash-router';
 import { prepareTask, dispatchTask, terminalTask, taskProgress, stoppingTask, mergeTaskReceipt, mergeTaskReceipts, validateExecution, supervisionSeconds, type BrowseExecution } from '@/lib/task-request.mjs';
@@ -13,14 +14,16 @@ type Receipt = { task_id: string; request_id: string; goal: string; status: stri
   created_at: number; deadline?: number; updated_at?: number; execution?: BrowseExecution; phone_received_at?: number; source_event_at_ms?: number | null; stale?: boolean; stop_confirmation_overdue?: boolean;
   result?: { run_id?: string; progress?: unknown; step?: unknown; answer?: string; reason?: string; message?: string; note?: string; prompt?: string; question?: string; options?: string[]; answerable?: boolean; verified?: boolean; execution_result?: ExecutionResult } };
 type Pending = { taskId: string; requestId: string };
+const props = withDefaults(defineProps<{ embedded?: boolean; workbench?: boolean; deviceId?: string; taskId?: string }>(), { embedded: false, deviceId: '', taskId: '' });
+const emit = defineEmits<{ viewEvidence: [taskId: string] }>();
 const path = useHashPathname();
 const params = useHashSearchParams();
 const targetTask = computed(() => {
-  const value = params.value.get('task') || '';
+  const value = props.taskId || params.value.get('task') || '';
   return /^[a-f0-9-]{36}$/.test(value) ? value : '';
 });
 // App mounts this page with the device path as its key. Freeze it for in-flight calls.
-const domain = ref(path.value.split('/')[2] || '');
+const domain = ref(props.deviceId || path.value.split('/')[2] || '');
 const goal = ref('');
 const timeoutSeconds = ref(900);
 const browseMode = ref(false);
@@ -304,24 +307,26 @@ onMounted(() => {
     const saved = JSON.parse(sessionStorage.getItem(key.value) || 'null');
     if (saved && /^[a-f0-9-]{36}$/.test(saved.taskId) && /^[a-f0-9-]{36}$/.test(saved.requestId)) pending.value = saved;
   } catch { /* An unreadable local receipt never causes automatic submission. */ }
-  void checkNativeConnection(); void refresh(); let nativeTicks = 0;
+  if (!props.embedded) void checkNativeConnection(); void refresh(); let nativeTicks = 0;
   timer = setInterval(() => { void refresh(); if (nativeOnboardingPending.value && ++nativeTicks >= 3) { nativeTicks = 0; void checkNativeConnection(); } }, 5000);
 });
 onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
 </script>
 
 <template>
-  <main class="mx-auto max-w-4xl space-y-6 p-4 sm:p-6">
-    <header class="flex flex-wrap items-start justify-between gap-4">
-      <div><a :href="toHashHref('/devices/' + domain)" class="text-sm underline">返回设备详情</a>
-        <h1 class="mt-3 text-2xl font-semibold">让手机完成任务</h1></div>
-      <a :href="toHashHref('/evidence/' + domain)" class="rounded border px-4 py-2 text-sm">查看截图与归档</a>
-    </header>
-    <div class="flex flex-wrap items-center gap-3 rounded border p-3 text-sm" role="status">
+  <div class="device-ai-shell" :class="{ embedded }">
+    <Sidebar v-if="!embedded" />
+    <main class="device-ai-main">
+      <header v-if="!embedded" class="device-ai-header">
+        <div><h1>智能任务 <span>· 单台手机</span></h1><p>当前设备：{{ domain }}</p></div>
+        <nav aria-label="任务导航"><a :href="toHashHref('/devices/' + domain)">设备详情</a><a :href="toHashHref('/fleet-chat')">设备与分组任务</a><a :href="toHashHref('/evidence/' + domain)">查看截图与归档</a></nav>
+      </header>
+      <div class="device-ai-layout"><div class="device-ai-content">
+    <div v-if="!embedded" class="device-ai-status" role="status">
       <span>{{ nativeConnection }}</span>
       <button class="underline" :disabled="checkingNative" @click="checkNativeConnection">刷新连接</button>
     </div>
-    <form class="space-y-3 rounded-lg border bg-card p-4" @submit.prevent="submit">
+    <form v-if="!embedded" class="device-ai-compose space-y-3" @submit.prevent="submit">
       <label for="task-goal" class="block font-medium">这次需要做什么？</label>
       <textarea id="task-goal" v-model="goal" rows="4" maxlength="4000" class="w-full resize-y rounded-md border bg-background p-3 text-base"
         placeholder="例如：打开抖音浏览视频，只查看，不点赞、评论、关注、发送消息或发布内容。" />
@@ -363,11 +368,11 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
     <p v-if="error" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ error }}</p>
     <p v-if="submitError" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ submitError }}</p>
     <p v-if="answerError" role="alert" class="rounded border border-amber-500 p-3 text-sm">{{ answerError }}</p>
-    <section aria-label="任务记录" class="space-y-4">
+    <section aria-label="任务记录" class="device-ai-records space-y-4">
       <div class="flex items-center justify-between"><h2 class="text-lg font-semibold">任务记录</h2>
         <button :disabled="loading" class="rounded border px-3 py-1 text-sm" @click="refresh(true)">刷新状态</button></div>
       <p v-if="loaded && !receipts.length" class="rounded border p-6 text-sm text-muted-foreground">还没有任务。输入本次需求即可开始。</p>
-      <article v-for="task in [...receipts].sort((a, b) => Number(b.task_id === targetTask) - Number(a.task_id === targetTask))" :key="task.task_id" class="space-y-3 rounded-lg border bg-card p-4">
+      <article v-for="task in (embedded && targetTask ? receipts.filter(row => row.task_id === targetTask) : [...receipts].sort((a, b) => Number(b.task_id === targetTask) - Number(a.task_id === targetTask)))" :id="`receipt-${task.task_id}`" :key="task.task_id" class="device-ai-receipt space-y-3 rounded-lg border bg-card p-4">
         <p v-if="task.task_id === targetTask" class="text-sm font-medium text-blue-700">从智能任务记录打开的原任务</p>
         <div class="flex flex-wrap justify-between gap-2"><strong>{{ taskName(task) }}</strong>
           <time class="text-sm text-muted-foreground">{{ new Date(task.created_at * 1000).toLocaleString() }}</time></div>
@@ -420,9 +425,17 @@ onBeforeUnmount(() => { mounted = false; clearInterval(timer); });
           <p v-else class="text-sm text-muted-foreground">{{ task.answer_submission?.status === 'rejected' ? '答复未被接收。请核对手机当前提示；本次答复不会重发。' : '本问题已有答复提交记录，正在核对后续状态，不会重复发送。' }}</p>
         </form>
         <p v-if="task.status === 'waiting_on_phone'" class="text-sm text-amber-700">这一步需要在手机处理，请查看手机提示；网页不能代替系统授权或身份验证。</p>
-        <div class="flex gap-4 text-sm"><a :href="toHashHref('/evidence/' + domain + '?task=' + task.task_id)" class="underline">查看本次证据</a>
+        <div class="flex gap-4 text-sm"><button v-if="workbench" class="underline" @click="emit('viewEvidence', task.task_id)">查看本次证据</button><a v-else :href="toHashHref('/evidence/' + domain + '?task=' + task.task_id)" class="underline">查看本次证据</a>
           <button v-if="!terminalTask(task.status)" :disabled="busy" class="underline" @click="cancel(task)">{{ isStopping(task) ? '再次请求停止' : '停止任务' }}</button></div>
       </article>
     </section>
-  </main>
+      </div>
+      <aside v-if="!embedded" class="device-ai-history" aria-label="本机任务列表"><h2>本机任务</h2><p v-if="!receipts.length">任务记录会显示在这里。</p><a v-for="task in receipts" :key="task.task_id" :href="toHashHref('/ai/' + domain + '?task=' + task.task_id)"><strong>{{ task.goal }}</strong><span>{{ taskName(task) }}</span></a></aside>
+      </div>
+    </main>
+  </div>
 </template>
+<style scoped>
+.device-ai-shell{display:flex;min-height:100vh;background:#f7f9f8;color:#1d3028}.device-ai-main{display:flex;min-width:0;flex:1;flex-direction:column}.device-ai-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:16px 24px;border-bottom:1px solid #e4ece7;background:#fff}.device-ai-header h1{font-size:18px;font-weight:600}.device-ai-header h1 span{font-size:13px;color:#71857a;font-weight:400}.device-ai-header p{margin-top:4px;font-size:12px;color:#72847a}.device-ai-header nav{display:flex;flex-wrap:wrap;gap:8px}.device-ai-header nav a{border:1px solid #dbe9df;border-radius:8px;padding:7px 11px;background:#fff;color:#246343;font-size:13px}.device-ai-layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;flex:1;min-height:0}.device-ai-content{display:flex;min-width:0;flex-direction:column;gap:16px;padding:20px 28px}.device-ai-status{display:flex;align-items:center;flex-wrap:wrap;gap:12px;border:1px solid #dcebe0;border-radius:10px;background:#f0f8f2;padding:12px 14px;font-size:13px;color:#3d6750}.device-ai-status button{color:#008b47;text-decoration:underline}.device-ai-records{order:1;max-width:960px;width:100%;max-height:55vh;overflow-y:auto;overscroll-behavior:contain;padding:2px 4px 2px 0}.device-ai-compose{order:2;max-width:960px;width:100%;border:1px solid #d6e3da;border-radius:12px;background:white;padding:16px;box-shadow:0 1px 4px #193b2510}.device-ai-compose textarea,.device-ai-compose input{border-color:#d6e3da}.device-ai-compose button[type=submit]{background:#00964c;color:white}.device-ai-receipt{border-color:#dce8df;background:white}.device-ai-history{border-left:1px solid #e4ece7;background:#fbfdfb;padding:20px}.device-ai-history h2{font-weight:600}.device-ai-history p{margin-top:16px;color:#72847a;font-size:13px}.device-ai-history a{display:block;margin-top:12px;padding:12px;border:1px solid #e4eee7;border-radius:8px;background:white;font-size:12px}.device-ai-history a strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.device-ai-history a span{display:block;margin-top:5px;color:#008b47}@media(min-width:1024px){.device-ai-main{margin-left:220px}}@media(max-width:900px){.device-ai-layout{grid-template-columns:minmax(0,1fr)}.device-ai-history{border-left:0;border-top:1px solid #e4ece7}.device-ai-content{padding:16px}}
+.embedded .device-ai-main{margin-left:0;min-height:0}.embedded .device-ai-layout{display:block}.embedded .device-ai-content{padding:0}.embedded .device-ai-records{max-height:none;overflow:visible}.embedded.device-ai-shell{min-height:0;background:transparent}
+</style>

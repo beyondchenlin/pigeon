@@ -20,8 +20,6 @@ import {
   LayoutGrid,
   Smartphone,
   List,
-  Pause,
-  Play,
   Battery,
   Plus,
   Power,
@@ -277,7 +275,6 @@ const mobile = useMobileViewport();
 const savedView = sessionStorage.getItem('bk-device-view');
 const viewMode = ref<"cards" | "list" | "single">(savedView === 'list' || savedView === 'single' ? savedView : 'cards');
 watch(viewMode, value => sessionStorage.setItem('bk-device-view', value));
-const previewsPaused = ref(false);
 const groupKeyword = ref("");
 
 const deviceKeyword = ref("");
@@ -1585,7 +1582,6 @@ const onTokenConfigOpenChange = (open: boolean) => {
                   <Button size="sm" :variant="viewMode === 'list' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'list'" @click="viewMode = 'list'"><List class="h-3.5 w-3.5" />列表</Button>
                   <Button size="sm" :variant="viewMode === 'single' ? 'secondary' : 'ghost'" class="h-7 gap-1 px-2 text-xs" :aria-pressed="viewMode === 'single'" @click="viewMode = 'single'"><Smartphone class="h-3.5 w-3.5" />单卡片</Button>
                 </div>
-                <Button v-if="viewMode !== 'list'" size="sm" variant="outline" class="h-8 gap-1.5 text-xs" @click="previewsPaused = !previewsPaused"><component :is="previewsPaused ? Play : Pause" class="h-3.5 w-3.5" />{{ previewsPaused ? '恢复预览' : '暂停预览' }}</Button>
                 <div v-if="viewMode === 'list'">
                   <DropdownMenu>
                     <DropdownMenuTrigger as-child>
@@ -1646,7 +1642,7 @@ const onTokenConfigOpenChange = (open: boolean) => {
                 </Button>
               </EmptyState>
             </div>
-            <DeviceGallery v-else-if="viewMode !== 'list' || mobile" :devices="pagedRows" :mode="viewMode" :paused="previewsPaused" :selected="selectedIds" @open="openControl" @details="void onOpenDevice($event as DeviceRecord)" @toggle="onToggleDevice" />
+            <DeviceGallery v-else-if="viewMode !== 'list' || mobile" :devices="pagedRows" :mode="viewMode" :selected="selectedIds" @open="openControl" @details="void onOpenDevice($event as DeviceRecord)" @toggle="onToggleDevice" />
             <div v-else class="min-h-0 flex-1 overflow-auto">
               <table class="w-full text-xs border-collapse">
                 <thead class="sticky top-0 z-10 bg-background border-b border-border">

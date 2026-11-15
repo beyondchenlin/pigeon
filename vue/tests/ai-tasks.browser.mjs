@@ -123,7 +123,7 @@ try {
   const attached=await call('Target.attachToTarget',{targetId:target.targetId,flatten:true},null);session=attached.sessionId;
   await call('Page.enable');await call('Runtime.enable');
   await call('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
-  await navigate('/ai/phonea');
+  await navigate('/device-task/phonea');
   await waitFor(textIncludes('还没有任务'));
   await fill('#task-goal','只浏览，不互动');
   await evaluate('document.querySelector("input[type=checkbox]").click()');
@@ -244,7 +244,7 @@ try {
       execution_finished:true,elapsed_ms:11805,active_ms:0,observations:0,reason:'model_usage_unreported',
       evidence:{state:'missing',reason:'actual_task_display_unavailable',display_id:-1}}}};
   state.tasks=[failed,...state.tasks];
-  await navigate('/ai/phonea');await waitFor(textIncludes('模型未报告本次用量，无法核对预算。'));
+  await navigate('/device-task/phonea');await waitFor(textIncludes('模型未报告本次用量，无法核对预算。'));
   const failedArticle='[...document.querySelectorAll("article")].find(x=>x.textContent.includes("合成模型用量缺失任务"))';
   assert.ok(await evaluate(failedArticle+'.innerText.includes("本次未取得可用于结束证据的实际执行画面。")'));
   assert.ok(await evaluate(failedArticle+'.innerText.includes("未完成")&&'+failedArticle+'.innerText.includes("完整浏览验收未通过")'));
@@ -265,12 +265,12 @@ try {
   await refresh();await waitFor(failedArticle+'.querySelector(".border-l-2").textContent==="future_execution_reason"');
   passed('known model, budget and screenshot failures have Chinese explanations; diagnostics and unknown reasons remain intact');
 
-  await navigate('/ai/phonea');await waitFor(textIncludes('合成追问任务'));
+  await navigate('/device-task/phonea');await waitFor(textIncludes('合成追问任务'));
   state.holdNextPost=true;
   await fill('#task-goal','离开设备前下达的普通任务');await clickText('交给这台手机');
   const deadline=Date.now()+3000;while(!state.delayedPost&&Date.now()<deadline)await pause(20);
   assert.ok(state.delayedPost);
-  await evaluate('window.location.hash="/ai/phoneb"');
+  await evaluate('window.location.hash="/device-task/phoneb"');
   await waitFor(textIncludes('还没有任务'));
   state.delayedPost();state.delayedPost=null;
   await pause(150);
@@ -283,7 +283,7 @@ try {
   assert.ok(state.calls.some(c=>c.refresh==='1'));
   if(artifacts){
     await mkdir(artifacts,{recursive:true});
-    await navigate('/ai/phonea');await waitFor(textIncludes('离开设备前下达的普通任务'));
+    await navigate('/device-task/phonea');await waitFor(textIncludes('离开设备前下达的普通任务'));
     const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
     await writeFile(join(artifacts,'ai-tasks-synthetic.png'),Buffer.from(shot.data,'base64'));
     await writeFile(join(artifacts,'browser-results.json'),JSON.stringify({passed:passes,failed:0,

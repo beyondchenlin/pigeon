@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
-import { ArrowLeft, ExternalLink, RefreshCw, MoreHorizontal, Maximize, Minimize, Minimize2, X, Smartphone, Battery, Monitor, Cpu, Wifi, AppWindow, LockKeyhole, LockKeyholeOpen, Sun, Moon, Copy, Check, ChevronRight } from 'lucide-vue-next';
+import { ArrowLeft, ExternalLink, RefreshCw, MoreHorizontal, Maximize, Minimize, Minimize2, X, Smartphone, Battery, Monitor, Cpu, Wifi, AppWindow, LockKeyhole, LockKeyholeOpen, Sun, Moon, Copy, Check, ChevronRight, Power, RotateCw, Keyboard, PanelsTopLeft, MonitorOff, Settings2, ChevronsLeftRight } from 'lucide-vue-next';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Button } from '@/components/ui/button';
+import DevicePerformanceCharts from '@/components/devices/DevicePerformanceCharts.vue';
+import FleetChatPage from './FleetChatPage.vue';
+import EvidencePage from './EvidencePage.vue';
 import PhoneControl from '@/components/devices/PhoneControl.vue';
 import PhoneComposer from '@/components/devices/PhoneComposer.vue';
 import MaintenanceSwitch from '@/components/devices/MaintenanceSwitch.vue';
@@ -48,7 +51,7 @@ async function toggleBrowserFullscreen() {
       // Fullscreen the document, not just the canvas: portalled input/tool
       // dialogs must remain usable. Must run directly from a user's click.
       await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
-      ownsFullscreen = true; controlsVisible.value = false;
+      ownsFullscreen = true;
     }
     toolsOpen.value = false;
   } catch { actionNotice.value = '浏览器未允许全屏，请再点一次“全屏”；当前画面仍会自动适配。'; }
@@ -60,8 +63,13 @@ function openComposer() {
   if (phone.value?.isTyping()) { actionNotice.value = '文字正在写入手机，请稍后再打开输入面板。'; return; }
   phone.value?.releaseKeyboard(); toolsOpen.value = false; composerOpen.value = true;
 }
+function showTools() {
+  if (detailsElement.value instanceof HTMLDialogElement && detailsElement.value.open) detailsElement.value.close();
+  toolsOpen.value = true;
+}
 function showDetails() {
   toolsOpen.value = false;
+  openTab('properties');
   if (detailsElement.value instanceof HTMLDialogElement) detailsElement.value.showModal();
   else { controlsVisible.value = true; detailsElement.value?.scrollIntoView({ block: 'nearest' }); }
 }
@@ -77,8 +85,22 @@ function escapeTools(e: KeyboardEvent) { if (e.key === 'Escape') controlsVisible
 const online = computed(() => record.value.state === 'online');
 const { data, stale, sampledTime, loading, refresh } = useDeviceTelemetry(id, online);
 const { status, info, displays, connected, stale: statusStale, sampled, logs, command, requestCommand, log } = useDeviceChannel(id, online);
-const tab = ref('properties');
-const tabs = [{ id: 'properties', label: '设备属性' }, { id: 'performance', label: '性能' }, { id: 'files', label: '文件' }, { id: 'logs', label: '连接日志' }];
+const tab = ref('evidence');
+const tabs = [
+  { id: 'properties', label: '设备属性' },
+  { id: 'performance', label: '性能' },
+  { id: 'files', label: '文件' },
+  { id: 'logs', label: '连接日志' },
+  { id: 'ai', label: 'AI 任务' },
+  { id: 'evidence', label: '任务证据' },
+];
+const chatVisited = ref(false);
+const evidenceTask = ref('');
+function openTab(name: string, taskId = '') {
+  if (name === 'ai') chatVisited.value = true;
+  if (name === 'evidence') evidenceTask.value = taskId;
+  tab.value = name;
+}
 const manufacturer = computed(() => data.value.system?.manufacturer || record.value.brand || '');
 const model = computed(() => data.value.system?.model || info.value.model || record.value.model || '');
 const title = computed(() => [manufacturer.value, model.value].filter(Boolean).join(' ') || record.value.comment || id.value);
@@ -163,7 +185,7 @@ async function copyId() {
   catch { copyMessage.value = '复制失败，请选择设备 ID 后手动复制'; }
   copyTimer = setTimeout(() => { copied.value = false; copyMessage.value = ''; }, 3000);
 }
-function selectTab(index: number) { const item = tabs[(index + tabs.length) % tabs.length]; if (item) { tab.value = item.id; document.getElementById(`tab-${item.id}`)?.focus(); } }
+function selectTab(index: number) { const item = tabs[(index + tabs.length) % tabs.length]; if (item) { openTab(item.id); document.getElementById(`tab-${item.id}`)?.focus(); } }
 function send(cmd: string, payload: unknown) { phone.value?.interact(); if (command(cmd, payload)) log(cmd === 'device/wakeup' ? '已发送唤醒指令' : '已发送手机导航指令'); }
 onMounted(() => { document.addEventListener('keydown', escapeTools); document.addEventListener('fullscreenchange', fullscreenChanged); fullscreenChanged(); void load(); timer = setInterval(() => void load(), 15000); });
 onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); document.removeEventListener('fullscreenchange', fullscreenChanged); if (ownsFullscreen && document.fullscreenElement === document.documentElement) void document.exitFullscreen().catch(() => {}); disposed = true; controller?.abort(); clearInterval(timer); clearTimeout(copyTimer); });
@@ -181,32 +203,37 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
             <p class="mt-0.5 truncate text-xs text-muted-foreground" :title="subtitle">{{ subtitle }}</p>
           </div>
         </div>
-        <div class="header-actions"><Button size="sm" variant="ghost" :disabled="fullscreenBusy" :aria-label="browserFullscreen ? '退出浏览器全屏' : '进入浏览器全屏'" @click="toggleBrowserFullscreen"><component :is="browserFullscreen ? Minimize : Maximize" class="h-3.5 w-3.5" /><span>{{ browserFullscreen ? '退出全屏' : '全屏' }}</span></Button><Button size="sm" variant="ghost" :disabled="textBusy" @click="showSwitch">切换 ▾</Button><button class="hide-tools" aria-label="隐藏远控工具" @click="controlsVisible = false"><Minimize2 class="h-4 w-4" /></button></div>
+        <div class="header-actions"><Button size="sm" variant="ghost" :disabled="fullscreenBusy" :aria-label="browserFullscreen ? '退出浏览器全屏' : '进入浏览器全屏'" @click="toggleBrowserFullscreen"><component :is="browserFullscreen ? Minimize : Maximize" class="h-3.5 w-3.5" /><span>{{ browserFullscreen ? '退出全屏' : '全屏' }}</span></Button><Button size="sm" variant="ghost" :disabled="textBusy" @click="showSwitch">切换 ▾</Button><Button size="sm" variant="ghost" aria-label="进入纯画面" @click="controlsVisible = false"><Minimize2 class="h-4 w-4" /><span>纯画面</span></Button></div>
       </header>
       <p v-if="recordError" role="alert" class="mx-4 mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{{ recordError }} <button class="underline" @click="load">重试</button></p>
       <div class="workbench-layout">
-        <PhoneControl ref="phone" class="workbench-phone" immersive :video-preference="videoSettings" :controls-visible="controlsVisible" :text-busy="textBusy" @hide-tools="controlsVisible = false" @compose="openComposer" @tools="toolsOpen = true" :device-id="id" :online="online" :command-ready="connected" :request-command="requestCommand" :rotation="rotation" @command="send" @log="log" />
+        <PhoneControl ref="phone" class="workbench-phone" immersive :video-preference="videoSettings" :controls-visible="controlsVisible" :text-busy="textBusy" @compose="openComposer" @tools="showTools" :device-id="id" :online="online" :command-ready="connected" :request-command="requestCommand" :rotation="rotation" @command="send" @log="log" />
         <component :is="mobile ? 'dialog' : 'section'" ref="detailsElement" class="workbench-details rounded-lg border border-border bg-background" aria-label="设备信息与工具">
           <div v-if="mobile" class="flex items-center justify-between border-b p-3"><strong class="text-sm">设备信息与工具</strong><button aria-label="关闭设备信息" class="p-2" @click="(detailsElement as HTMLDialogElement)?.close()"><X class="h-4 w-4" /></button></div>
-          <div v-if="!mobile" class="flex flex-wrap gap-2 border-b p-3"><Button size="sm" @click="openComposer">文字输入</Button><Button size="sm" variant="outline" @click="toolsOpen = true">应用与更多工具</Button></div>
           <div class="details-toolbar border-b border-border">
             <div class="details-tabs" role="tablist" aria-label="设备信息">
-              <button v-for="(item, index) in tabs" :id="`tab-${item.id}`" :key="item.id" role="tab" :aria-selected="tab === item.id" :aria-controls="`panel-${item.id}`" :tabindex="tab === item.id ? 0 : -1" class="border-b-2 py-3.5 text-sm" :class="tab === item.id ? 'border-orange-500 font-semibold text-orange-600' : 'border-transparent text-muted-foreground hover:text-foreground'" @click="tab = item.id" @keydown.right.prevent="selectTab(index + 1)" @keydown.left.prevent="selectTab(index - 1)" @keydown.home.prevent="selectTab(0)" @keydown.end.prevent="selectTab(tabs.length - 1)">{{ item.label }}</button>
+              <button v-for="(item, index) in tabs" :id="`tab-${item.id}`" :key="item.id" role="tab" :aria-selected="tab === item.id" :aria-controls="`panel-${item.id}`" :tabindex="tab === item.id ? 0 : -1" class="border-b-2 py-3.5 text-sm" :class="tab === item.id ? 'border-orange-500 font-semibold text-orange-600' : 'border-transparent text-muted-foreground hover:text-foreground'" @click="openTab(item.id)" @keydown.right.prevent="selectTab(index + 1)" @keydown.left.prevent="selectTab(index - 1)" @keydown.home.prevent="selectTab(0)" @keydown.end.prevent="selectTab(tabs.length - 1)">{{ item.label }}</button>
             </div>
-            <Button variant="ghost" size="sm" class="gap-1 text-xs" :disabled="loading || !online" @click="refresh"><RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': loading }" />刷新数据</Button>
+            <Button size="sm" variant="outline" class="shrink-0" aria-haspopup="dialog" @click="showTools">应用与更多工具</Button>
           </div>
-          <div class="status-strip border-b border-border bg-muted/10" aria-label="手机当前状态">
+          <div v-if="tab === 'properties' || tab === 'performance'" class="status-strip border-b border-border bg-muted/10" aria-label="手机当前状态">
             <div class="status-badges">
               <span :class="{ 'text-amber-700 dark:text-amber-400': stale }" data-battery-summary><Battery class="h-4 w-4" :class="{ 'text-emerald-600': !stale }" />{{ batteryPercent == null ? '电量未知' : `${batteryPercent}%` }} · {{ batteryStatus }}<small v-if="stale">{{ data.sampled_at ? '（上次读数）' : '（待采集）' }}</small></span>
               <span :class="{ 'text-muted-foreground': statusStale }"><component :is="status.locked === false ? LockKeyholeOpen : LockKeyhole" class="h-4 w-4" />{{ yes(status.locked, '已锁定', '已解锁') }}<small v-if="statusStale && sampled">（上次）</small></span>
               <span :class="{ 'text-muted-foreground': statusStale }"><component :is="info.screenOn === false ? Moon : Sun" class="h-4 w-4 text-orange-500" />{{ yes(info.screenOn, '已亮屏', '已熄屏') }}<small v-if="statusStale && sampled">（上次）</small></span>
             </div>
-            <div class="sample-times text-muted-foreground">
-              <span :class="{ 'text-amber-700 dark:text-amber-400': stale }">电池 / 存储 {{ sampledTime }} · {{ stale ? '未取得最新数据' : '手机系统采集' }}</span>
-              <span :class="{ 'text-amber-700 dark:text-amber-400': statusStale }">运行状态 {{ sampled ? new Date(sampled).toLocaleTimeString() : '—' }} · {{ statusStale ? '未取得最新数据' : '实时' }}</span>
+            <div class="ml-auto flex flex-wrap items-center justify-end gap-x-3">
+              <div class="sample-times text-muted-foreground">
+                <span :class="{ 'text-amber-700 dark:text-amber-400': stale }">电池 / 存储 {{ sampledTime }} · {{ stale ? '未取得最新数据' : '手机系统采集' }}</span>
+                <span :class="{ 'text-amber-700 dark:text-amber-400': statusStale }">运行状态 {{ sampled ? new Date(sampled).toLocaleTimeString() : '—' }} · {{ statusStale ? '未取得最新数据' : '实时' }}</span>
+              </div>
+              <Button variant="ghost" size="sm" class="gap-1 text-xs" :disabled="loading || !online" @click="refresh"><RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': loading }" />刷新数据</Button>
             </div>
           </div>
-          <div :id="`panel-${tab}`" :key="tab" class="details-scroll" role="tabpanel" :aria-labelledby="`tab-${tab}`" tabindex="0">
+          <div v-if="chatVisited" v-show="tab === 'ai'" id="panel-ai" class="details-scroll" role="tabpanel" aria-labelledby="tab-ai" tabindex="0">
+            <FleetChatPage :key="id" :workbench-device="id" :active="tab === 'ai'" @view-evidence="openTab('evidence', $event)" />
+          </div>
+          <div v-if="tab !== 'ai'" :id="`panel-${tab}`" :key="tab" class="details-scroll" role="tabpanel" :aria-labelledby="`tab-${tab}`" tabindex="0">
             <div v-if="tab === 'properties'" class="properties-content">
               <div class="property-grid">
                 <section v-for="section in sections" :key="section.title" class="property-section">
@@ -232,32 +259,43 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
             <div v-else-if="tab === 'performance'" class="space-y-6 p-5">
               <section v-for="metric in performance" :key="metric.name"><div class="mb-2 flex justify-between text-sm"><span>{{ metric.name }}</span><span class="tabular-nums">{{ fixed(metric.value, '%') }}</span></div><div v-if="metric.value != null" class="h-2 overflow-hidden rounded bg-muted"><div class="h-full rounded bg-emerald-500" :style="{ width: `${metric.value}%` }" /></div><p class="mt-2 text-xs text-muted-foreground">{{ metric.detail }}</p></section>
               <dl class="grid grid-cols-2 gap-3 border-t pt-4 text-xs"><dt class="text-muted-foreground">核心温度</dt><dd>{{ fixed(status.core_temperature, ' °C') }}</dd><dt class="text-muted-foreground">本次开机累计发送</dt><dd>{{ bytes(status.net_io_bytes_sent) }}</dd><dt class="text-muted-foreground">本次开机累计接收</dt><dd>{{ bytes(status.net_io_bytes_recv) }}</dd></dl>
-              <Button variant="outline" size="sm" @click="router.push(`/devices/${id}`)">查看历史性能与应用统计</Button>
+              <DevicePerformanceCharts :key="id" :device-id="id" :live-status="status" :sampled-at="sampled" />
             </div>
-            <div v-else-if="tab === 'files'" class="file-panel"><p class="text-xs text-muted-foreground">手机文件管理 · 应用与更多工具可从右上角“更多工具”进入。</p><iframe v-if="online" :src="`/d/${id}/fs/?mode=embed`" title="手机文件管理" class="file-frame rounded border" /><p v-else class="p-8 text-center text-sm text-muted-foreground">设备离线，暂时无法浏览文件。</p></div>
+            <EvidencePage v-else-if="tab === 'evidence'" :key="id" :device-id="id" :task-id="evidenceTask" @show-all="openTab('evidence')" @back-to-tasks="openTab('ai')" />
+            <div v-else-if="tab === 'files'" class="file-panel"><p class="text-xs text-muted-foreground">手机文件管理</p><iframe v-if="online" :src="`/d/${id}/fs/?mode=embed`" title="手机文件管理" class="file-frame rounded border" /><p v-else class="p-8 text-center text-sm text-muted-foreground">设备离线，暂时无法浏览文件。</p></div>
             <div v-else class="p-5"><p class="mb-4 text-xs text-muted-foreground">本页连接与操作记录，最多保留最近 80 条。</p><ol class="space-y-3 text-xs"><li v-for="(entry, index) in logs" :key="index" class="flex gap-4"><time class="shrink-0 tabular-nums text-muted-foreground">{{ entry.time }}</time><span>{{ entry.message }}</span></li></ol></div>
           </div>
         </component>
       </div>
     </main>
-    <button v-if="!controlsVisible" class="restore-tools" aria-label="展开远控工具" @click="controlsVisible = true"><MoreHorizontal class="h-4 w-4" /><span>工具</span></button>
+    <button v-if="!controlsVisible" class="restore-tools" aria-label="退出纯画面" @click="controlsVisible = true"><MoreHorizontal class="h-4 w-4" /><span>退出</span></button>
     <p v-if="actionNotice" class="workbench-notice" role="status" @click="actionNotice = ''">{{ actionNotice }}</p>
     <PhoneComposer v-model:open="composerOpen" :device-id="id" :title="title" :connected="connected" :request="requestCommand" @busy="textBusy = $event" />
-    <Dialog v-model:open="toolsOpen"><DialogContent><DialogHeader><DialogTitle>手机工具 · {{ title }}</DialogTitle></DialogHeader><div class="remote-tool-grid">
-      <Button variant="outline" :disabled="fullscreenBusy" @click="toggleBrowserFullscreen">{{ browserFullscreen ? '退出浏览器全屏' : '全屏隐藏浏览器栏' }}</Button>
-      <Button variant="outline" :disabled="!connected || textBusy" @click="send('device/wakeup', []); toolsOpen = false">唤醒手机</Button>
-      <Button variant="outline" @click="phone?.reconnect(); toolsOpen = false">重连画面</Button>
-      <Button variant="outline" @click="showDetails">设备属性与文件</Button><Button variant="outline" @click="showSwitch">切换手机</Button>
-      <Button variant="outline" @click="openComposer">文字输入</Button><Button variant="outline" @click="toolsOpen = false; controlsVisible = false">纯画面查看</Button>
-      <a :href="`/d/${id}/?native=1`" target="_blank" rel="noopener" class="rounded border p-3 text-center text-sm">原生应用与更多工具 ↗</a><Button variant="outline" @click="router.push(`/devices/${id}`)">设备详情与权限</Button>
-    </div>
-    <MaintenanceSwitch v-if="toolsOpen" :key="id" :device-id="id" />
-    <fieldset class="grid grid-cols-2 gap-3 rounded border p-3"><legend class="px-1 text-sm font-medium">传屏设置</legend>
-      <label class="flex flex-col gap-1 text-sm">清晰度<select v-model="videoSettings.resolution" class="rounded border bg-background p-2" aria-label="传屏清晰度"><option value="auto">自动 · 响应优先</option><option :value="240">240 · 省流</option><option :value="360">360 · 流畅</option><option :value="480">480 · 均衡</option><option :value="720">720 · 清晰</option></select></label>
-      <label class="flex flex-col gap-1 text-sm">帧率上限<select v-model="videoSettings.fps" :disabled="videoSettings.resolution==='auto'" class="rounded border bg-background p-2 disabled:opacity-50" aria-label="传屏帧率"><option :value="10">10 帧/秒</option><option :value="15">15 帧/秒</option><option :value="20">20 帧/秒</option></select></label>
-      <p class="col-span-2 text-xs text-muted-foreground">自动档按网络调整；画面静止后补充清晰画面，操作时立即恢复实时画面。分辨率按短边等比例缩放。当前请求 {{ phone?.videoProfile.short ?? 360 }} / {{ phone?.videoProfile.fps ?? 10 }} FPS。</p>
-    </fieldset>
-    <p class="text-xs text-muted-foreground">点击画面一次只隐藏工具；收起后正常操作手机。右侧“工具”可随时恢复。</p><p class="text-xs text-muted-foreground">{{ phone?.mode === 'webrtc' ? 'WebRTC' : '兼容传屏' }} · {{ phone?.fps ?? 0 }} FPS · 媒体 RTT {{ phone?.mediaRtt ?? '—' }} ms</p></DialogContent></Dialog>
+    <Dialog v-model:open="toolsOpen"><DialogContent class="tools-dialog sm:max-w-[680px]">
+      <DialogHeader class="tools-header"><DialogTitle class="tools-title"><span class="tools-title-icon"><Settings2 class="h-4 w-4" /></span><span>手机工具 <small>{{ title }}</small></span></DialogTitle><p class="tools-subtitle">常用操作、设备工具与传屏设置</p></DialogHeader>
+      <div class="tools-body">
+        <section class="tools-section" aria-label="常用操作"><h3>常用操作</h3><div class="remote-tool-grid">
+          <Button variant="outline" :disabled="fullscreenBusy" @click="toggleBrowserFullscreen"><Maximize class="tool-icon" />{{ browserFullscreen ? '退出浏览器全屏' : '全屏查看' }}</Button>
+          <Button variant="outline" :disabled="!connected || textBusy" @click="send('device/wakeup', []); toolsOpen = false"><Power class="tool-icon" />唤醒手机</Button>
+          <Button variant="outline" @click="phone?.reconnect(); toolsOpen = false"><RotateCw class="tool-icon" />重连画面</Button>
+          <Button variant="outline" @click="openComposer"><Keyboard class="tool-icon" />文字输入</Button>
+          <Button variant="outline" @click="showSwitch"><ChevronsLeftRight class="tool-icon" />切换手机</Button>
+          <Button variant="outline" @click="toolsOpen = false; controlsVisible = false"><MonitorOff class="tool-icon" />纯画面查看</Button>
+        </div></section>
+        <section class="tools-section" aria-label="设备工具"><h3>设备工具</h3><div class="remote-tool-grid">
+          <Button variant="outline" @click="showDetails"><PanelsTopLeft class="tool-icon" />设备属性与文件</Button>
+          <Button variant="outline" @click="router.push(`/devices/${id}`)"><Smartphone class="tool-icon" />设备详情与权限</Button>
+          <a :href="`/d/${id}/?native=1`" target="_blank" rel="noopener" class="tool-link"><AppWindow class="tool-icon" />原生应用与更多工具 <ExternalLink class="ml-auto h-3.5 w-3.5 text-muted-foreground" /></a>
+        </div></section>
+        <div class="tools-settings"><fieldset class="video-settings"><legend>传屏设置</legend><div class="video-settings-grid">
+          <label>清晰度<select v-model="videoSettings.resolution" aria-label="传屏清晰度"><option value="auto">自动 · 响应优先</option><option :value="240">240 · 省流</option><option :value="360">360 · 流畅</option><option :value="480">480 · 均衡</option><option :value="720">720 · 清晰</option></select></label>
+          <label>帧率上限<select v-model="videoSettings.fps" :disabled="videoSettings.resolution==='auto'" aria-label="传屏帧率"><option :value="10">10 帧/秒</option><option :value="15">15 帧/秒</option><option :value="20">20 帧/秒</option></select></label></div>
+          <p>自动档按网络调整；画面静止后补充清晰画面。当前请求 {{ phone?.videoProfile.short ?? 360 }} / {{ phone?.videoProfile.fps ?? 10 }} FPS。</p></fieldset>
+          <MaintenanceSwitch v-if="toolsOpen" :key="id" :device-id="id" />
+        </div>
+        <div class="tools-footer"><span>点击手机画面可直接操作；使用按钮进入纯画面或全屏。</span><span>{{ phone?.mode === 'webrtc' ? 'WebRTC' : '兼容传屏' }} · {{ phone?.fps ?? 0 }} FPS · 媒体 RTT {{ phone?.mediaRtt ?? '—' }} ms</span></div>
+      </div>
+    </DialogContent></Dialog>
     <Dialog v-model:open="switchOpen"><DialogContent><DialogHeader><DialogTitle>切换手机</DialogTitle></DialogHeader><input v-model="switchQuery" class="rounded border p-2 text-base" placeholder="搜索设备名称或 ID" aria-label="搜索要切换的设备" /><p v-if="switchError" role="alert">{{ switchError }} <button @click="showSwitch">重试</button></p><p v-if="switchingLoading">正在读取设备…</p><div class="max-h-[50dvh] space-y-1 overflow-auto"><button v-for="item in availableDevices.filter(d => `${d.domain} ${d.comment} ${d.model}`.toLowerCase().includes(switchQuery.toLowerCase()))" :key="item.domain" class="flex min-h-12 w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left text-sm" :disabled="textBusy" @click="chooseDevice(item.domain)"><span class="truncate">{{ item.comment || item.model || item.domain }}</span><span class="shrink-0 text-xs text-muted-foreground">{{ item.state === 'online' ? '在线' : '离线' }}{{ item.domain === id ? ' · 当前' : '' }}</span></button></div></DialogContent></Dialog>
   </div>
 </template>
@@ -272,8 +310,8 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
 .workbench-layout { display: grid; gap: 16px; padding: 16px; min-height: 0; min-width: 0; }
 .workbench-phone { width: 100%; max-width: 440px; justify-self: center; height: min(860px, 88dvh); min-height: 440px; }
 .workbench-details { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; container-type: inline-size; }
-.details-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0 12px; padding: 0 16px; flex-shrink: 0; }
-.details-tabs { display: flex; gap: 22px; }
+.details-toolbar { display: flex; align-items: center; gap: 18px; padding: 0 16px; flex-shrink: 0; overflow-x: auto; }
+.details-tabs { display: flex; flex: none; gap: 22px; }
 .details-tabs button { white-space: nowrap; }
 .status-strip { padding: 12px 18px 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 9px 20px; flex-shrink: 0; }
 .status-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 20px; font-size: 12px; }
@@ -305,7 +343,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible, .details-scroll:fo
 @media (min-width: 1200px) {
   .device-workbench { height: 100dvh; overflow: hidden; }
   .workbench-main { display: flex; flex-direction: column; height: 100%; }
-  .workbench-layout { flex: 1; grid-template-columns: clamp(320px, 27vw, 440px) minmax(0, 1fr); overflow: hidden; }
+  .workbench-layout { flex: 1; grid-template-columns: minmax(0, 34fr) minmax(0, 66fr); overflow: hidden; }
   .workbench-phone { height: 100%; min-height: 0; max-width: none; }
   .details-scroll { overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; flex: 1; }
 }
@@ -338,4 +376,16 @@ button:focus-visible, a:focus-visible, summary:focus-visible, .details-scroll:fo
 .restore-tools{top:calc(var(--bk-viewport-top,0px) + var(--bk-viewport-height,100dvh)*.43);right:var(--bk-viewport-right,0px)}
 .workbench-notice{bottom:calc(var(--bk-viewport-bottom,0px) + 80px)}
 @media(min-width:768px) and (max-width:1199px){.device-workbench{height:var(--bk-viewport-height,100dvh)}.workbench-main{height:100%;display:flex;flex-direction:column}.workbench-layout{flex:1;min-height:0;grid-template-columns:minmax(220px,40%) minmax(0,1fr)}.workbench-phone{height:100%;min-height:0}.details-scroll{overflow:auto;flex:1}.workbench-clean{padding:0}}
+@media (min-width:768px) and (max-width:1199px) and (max-height:500px) {
+ .device-workbench:not(.workbench-clean){padding:0}
+ .device-workbench :deep(.bk-mobile-header),.device-workbench :deep(.bk-mobile-nav){display:none}
+ .workbench-header{padding:4px 12px;gap:6px;flex-wrap:nowrap}
+ .device-heading{flex:1 1 0;gap:6px}.device-heading h1{font-size:14px;line-height:18px}
+ .device-heading p{display:none}.header-actions{gap:4px}
+ .workbench-layout{padding:6px;gap:8px}
+}
+</style>
+
+<style scoped>
+:global(.tools-dialog){max-height:min(90dvh,850px);display:flex;flex-direction:column;gap:0;overflow:hidden;border-radius:12px;padding:0}.tools-header{padding:22px 24px 16px;border-bottom:1px solid var(--border);text-align:left}.tools-title{display:flex;align-items:center;gap:10px;font-size:17px}.tools-title small{margin-left:4px;font-size:12px;font-weight:400;color:var(--muted-foreground)}.tools-title-icon{display:grid;width:34px;height:34px;place-items:center;border-radius:9px;color:#f97316;background:#fff3eb}.tools-subtitle{margin:7px 0 0 44px;font-size:12px;color:var(--muted-foreground)}.tools-body{min-height:0;flex:1;overflow-y:auto;overscroll-behavior:contain;padding:18px 24px 20px}.tools-section+.tools-section{margin-top:20px}.tools-section h3{margin-bottom:10px;font-size:13px;font-weight:600}.remote-tool-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.remote-tool-grid button,.tool-link{display:flex;justify-content:flex-start;align-items:center;gap:9px;min-width:0;min-height:44px;height:auto;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--background);font-size:12px;text-align:left;white-space:normal}.remote-tool-grid button:hover,.tool-link:hover{border-color:#fed7aa;background:#fff7f0;color:#c25a11}.tool-icon{width:16px;height:16px;flex-shrink:0;color:#f97316}.tools-settings{display:grid;grid-template-columns:1fr;gap:14px;margin-top:22px}.video-settings{min-width:0;border:1px solid var(--border);border-radius:9px;background:var(--background);padding:14px}.video-settings legend{padding:0 5px;font-size:13px;font-weight:600}.video-settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.video-settings label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted-foreground)}.video-settings select{width:100%;min-height:38px;border:1px solid var(--border);border-radius:6px;background:var(--background);padding:6px 9px;color:var(--foreground)}.video-settings select:disabled{opacity:.5}.video-settings p{margin-top:10px;font-size:11px;line-height:1.6;color:var(--muted-foreground)}.tools-footer{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;margin-top:16px;font-size:11px;color:var(--muted-foreground)}@media(max-width:600px){.tools-header{padding:18px 18px 14px}.tools-body{padding:16px 18px 20px}.remote-tool-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.tools-title small{display:block;margin-left:0;margin-top:2px}}
 </style>

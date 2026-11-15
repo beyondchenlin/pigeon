@@ -228,6 +228,9 @@ const viewAllDevices = () => {
   currentPage.value = 1;
 };
 
+const ratios = ref<Record<string, string>>({});
+function setRatio(id: string, width: number, height: number) { if (width > 0 && height > 0) ratios.value[id] = `${width} / ${height}`; }
+
 const openDevice = (device: Device) => {
   if (device.status === "online") {
     window.open(`/d/${encodeURIComponent(device.id)}/`, "_blank");
@@ -406,53 +409,20 @@ const openDevice = (device: Device) => {
             </EmptyState>
           </div>
           <div v-else class="overview-device-grid rounded-lg border border-gray-100 bg-white p-3 shadow-sm">
-            <div
-              v-for="device in devices"
-              :key="device.id"
-              class="flex h-fit w-full cursor-pointer flex-col overflow-hidden rounded-md border border-gray-100 bg-white transition-all hover:border-gray-300 hover:bg-gray-50/60"
-              @click="openDevice(device)"
-            >
-              <!-- Screen Preview - Vertical Phone Ratio -->
-              <div
-                :class="
-                  cn(
-                    'relative aspect-[9/16] overflow-hidden border-b border-gray-100/80 flex items-center justify-center',
-                    device.status === 'online' ? 'bg-gray-50/70' : 'bg-gray-100/60',
-                  )
-                "
-              >
-                <div v-if="device.status !== 'online'" class="flex flex-col items-center justify-center gap-1">
-                  <div
-                    class="h-6 w-6 rounded-full border-2 border-dashed border-muted-foreground/30 flex items-center justify-center"
-                  >
-                    <X class="h-3 w-3 text-muted-foreground/50" />
-                  </div>
-                  <span class="text-[10px] text-muted-foreground/70 font-medium">
-                    {{ device.status === "pending" ? t.overviewPage.statusPending : t.overviewPage.statusOffline }}
-                  </span>
-                </div>
-                <DevicePreview
-                  v-else
-                  :device-id="device.id"
-                  active
-                  :placeholder="t.overviewPage.screenPlaceholder"
-                />
-              </div>
-
-              <!-- Device Info -->
-              <div class="p-1.5">
-                <div class="flex items-center gap-1.5">
-                  <p class="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{{ device.id }}</p>
-                  <span
-                    :class="cn('h-1.5 w-1.5 shrink-0 rounded-full', getStatusDot(device.status))"
-                    :title="device.status"
-                  />
-                </div>
-              </div>
-            </div>
+            <button v-for="device in devices" :key="device.id" type="button"
+              class="overview-phone" :style="{ aspectRatio: ratios[device.id] || '540 / 1194' }" :disabled="device.status !== 'online'"
+              :aria-label="`远控 ${device.id}`" @click="openDevice(device)">
+              <DevicePreview v-if="device.status === 'online'" :device-id="device.id" active :placeholder="t.overviewPage.screenPlaceholder" @dimensions="(w, h) => setRatio(device.id, w, h)" />
+              <div v-else class="overview-offline"><X class="h-6 w-6" /><span>{{ device.status === 'pending' ? t.overviewPage.statusPending : t.overviewPage.statusOffline }}</span></div>
+              <div class="overview-phone-info"><span class="truncate">{{ device.id }}</span><span :class="cn('h-2 w-2 shrink-0 rounded-full', getStatusDot(device.status))" /></div>
+            </button>
           </div>
           <div v-if="loading" class="mt-3 text-xs text-muted-foreground">{{ t.common.loading }}</div>
       </div>
     </main>
   </div>
 </template>
+
+<style scoped>
+.overview-phone{position:relative;width:100%;aspect-ratio:540/1194;overflow:hidden;border:1px solid #d8e3dc;border-radius:14px;background:#f4f7f5;text-align:left}.overview-phone:focus-visible{outline:2px solid #f97316;outline-offset:2px}.overview-phone :deep([data-preview-state]){background:#f4f7f5}.overview-phone :deep([data-preview-state] > span:last-child){bottom:38px}.overview-offline{display:flex;height:100%;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#7b8d82;font-size:12px}.overview-phone-info{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;color:#20352a;background:rgba(255,255,255,.91);font-size:11px}.overview-device-grid{grid-template-columns:repeat(auto-fill,minmax(160px,200px))}@media(max-width:767px){.overview-device-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>

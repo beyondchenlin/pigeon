@@ -75,7 +75,8 @@ const rendered = computed(() => {
   if (path === "/devices") return { component: DevicesPage, key: path };
   if (/^\/control\/[^/]+$/.test(path)) return { component: DeviceWorkbench, key: path };
   if (/^\/evidence\/[a-z0-9]+$/.test(path)) return { component: EvidencePage, key: path };
-  if (/^\/ai\/[a-z0-9]+$/.test(path)) return { component: AiTasksPage, key: path };
+  if (/^\/ai\/[a-z0-9]+$/.test(path)) return { component: FleetChatPage, key: path };
+  if (/^\/device-task\/[a-z0-9]+$/.test(path)) return { component: AiTasksPage, key: path };
   if (path === "/fleet-chat") return { component: FleetChatPage, key: path };
   if (path === "/devices/push") return { component: PushPage, key: path };
   if (path === "/devices/pull") return { component: PullPage, key: path };
