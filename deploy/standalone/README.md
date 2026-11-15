@@ -8,6 +8,12 @@ BK 使用 Pigeon 原有的 Docker Compose 架构。应用镜像从仓库里的 V
 
 从[里程碑发布页](https://github.com/beyondchenlin/pigeon/releases/tag/bk-v0.5.0-standalone)下载并解压 `BK-Pigeon-0.5.0-standalone.zip`，进入包内的 `deploy/standalone` 目录。也可以从同一 Git tag 的完整源码进入该目录。默认应用镜像是 `ghcr.io/beyondchenlin/bk-pigeon:0.5.0-standalone`。发布页列有不可变摘要，需要锁定镜像时可在生成的 `.env` 中设置 `BK_IMAGE=ghcr.io/beyondchenlin/bk-pigeon@sha256:完整摘要`。
 
+如需单独拉取 BK 应用镜像，可以执行：
+
+```sh
+docker pull ghcr.io/beyondchenlin/bk-pigeon:0.5.0-standalone
+```
+
 以下地址是示例，请换成**手机实际能访问的地址**。Windows 如使用 Python Launcher，可把 `python3` 换成 `py -3`。
 
 **局域网电脑**，例如手机和电脑都在同一个 Wi-Fi 下

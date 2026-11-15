@@ -4,6 +4,12 @@ PIGEON is an open-source, locally-deployed Android device management and automat
 
 在新电脑或服务器上安装 BK 群控，请按[独立部署说明](deploy/standalone/README.md)操作。Docker Compose 默认从 GitHub Container Registry 拉取已构建的 BK 镜像，并为每个实例生成单独的登录和设备凭据。
 
+单独拉取 BK 应用镜像：
+
+```sh
+docker pull ghcr.io/beyondchenlin/bk-pigeon:0.5.0-standalone
+```
+
 下面保留上游部署步骤。原版 Compose 默认使用 `firerpa/pigeon:1.0`。
 
 ## BUILDING
