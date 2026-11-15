@@ -23,19 +23,29 @@ def start():
         sys.exit('Set PIGEON_INITIAL_PASSWORD to a generated initial password (16+ characters).')
     state = Path('/user/phone-pilot')
     state.mkdir(mode=0o700, exist_ok=True)
+    # Seed the per-device policy once. An upgrade preserves the operator's
+    # settings, including installations with more than one API process.
+    devices = state / 'bk-ai-devices.json'
+    if not devices.exists():
+        seed_file(devices, Path(__file__).with_name('devices.json').read_bytes())
     key = state / 'bk-gateway-secret'
     if not key.exists():
-        import tempfile
-        with tempfile.NamedTemporaryFile(dir=state) as staged:
-            staged.write(secrets.token_hex(32).encode('ascii'))
-            staged.flush()
-            try:
-                os.link(staged.name, key)
-            except FileExistsError:
-                pass
+        seed_file(key, secrets.token_hex(32).encode('ascii'))
     from server.bk_native_gateway_api import load_secret
     load_secret()
     os.execv('/usr/local/bin/entry', ['entry'])
+
+
+def seed_file(target, contents):
+    import tempfile
+    with tempfile.NamedTemporaryFile(dir=target.parent) as staged:
+        staged.write(contents)
+        staged.flush()
+        os.fsync(staged.fileno())
+        try:
+            os.link(staged.name, target)
+        except FileExistsError:
+            pass
 
 
 if __name__ == '__main__':

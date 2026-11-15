@@ -7,6 +7,9 @@
 !ops/bk_ai_phone.py
 !ops/bk_native_mcp.py
 !ops/bk_ai_guard_extension.py
+!ops/bk_native_restart_once.py
+!ops/bk_service_lifecycle.py
+!ops/bk_lifecycle_monitor.py
 !deploy/pilot/wait_auth_then_frps.py
 !deploy/standalone/*.conf
 !deploy/standalone/devices.json

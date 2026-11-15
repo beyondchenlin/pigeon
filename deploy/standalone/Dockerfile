@@ -9,7 +9,7 @@ FROM ghcr.io/fatedier/frps:v0.72.0@sha256:74a92b46be8cb287636c8fd238eed53c26c915
 FROM firerpa/pigeon:1.0@sha256:325fdf57f506ab02e819e2b7cb2d384d5b427ea34c5de2efd5f1d927a7b27e01
 WORKDIR /opt/bk
 ENV PYTHONPATH=/opt/bk PYTHONDONTWRITEBYTECODE=1 \
-    BK_NATIVE_BUNDLE_DIR=/opt/bk/bridge BK_AI_DEVICES_FILE=/opt/bk/devices.json \
+    BK_NATIVE_BUNDLE_DIR=/opt/bk/bridge BK_AI_DEVICES_FILE=/user/phone-pilot/bk-ai-devices.json \
     BK_GATEWAY_LUA_DIR=/opt/bk/lua BK_GATEWAY_MANIFEST=/opt/bk/gateway.json \
     BK_CONSOLE_INDEX=/opt/bk/html/index.html BK_MAINTENANCE_DEVICE="" PIGEON_FORWARD_ONLY=1
 COPY --from=frp /usr/bin/frps /usr/sbin/frps
