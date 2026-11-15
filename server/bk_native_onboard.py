@@ -22,6 +22,11 @@ class OnboardError(Exception):
     pass
 
 
+class PreInstallError(OnboardError):
+    """The bridge installer was never invoked; no reload was dispatched."""
+    pass
+
+
 def _result(reply):
     if reply.exitstatus != 0 or len(reply.stdout) > MAX_REPLY:
         raise OnboardError('phone_command_failed')
@@ -56,6 +61,7 @@ def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_g
     if result.exitstatus != 0:
         raise OnboardError('staging_unavailable')
     complete = False
+    installer_started = False
     try:
         for name in FILES:
             device.upload_file(str(bundle / name), stage + '/' + name)
@@ -93,6 +99,7 @@ def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_g
                       ('not_installed', 'not_ready', 'auth_failed', 'incompatible') else 'not_ready'}
             if confirmed: result['guard_confirmed'] = True
             return result
+        installer_started = True
         installed = _result(device.execute_script(
             _python_command(stage + '/install_bk_native_bridge.py', []), timeout=25))
         if installed.get('installed') is not True or type(installed.get('restart_required')) is not bool:
@@ -106,6 +113,12 @@ def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_g
             return {'state': 'reload_required'}
         confirmation = _result(confirm_reply)
         return {'state': 'connected' if confirmation.get('restart_required') is False else 'reload_required'}
+    except Exception as error:
+        # Failures before invoking the installer cannot have changed the guard.
+        # Preserve the staged files and allow the caller to release only this reservation.
+        if not installer_started and not confirm_guard:
+            raise PreInstallError('pre_install_failed') from error
+        raise
     finally:
         if complete:
             # Delete only unchanged, task-owned files, and only if the stage

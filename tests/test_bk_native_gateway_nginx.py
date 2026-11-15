@@ -16,7 +16,7 @@ if 'POSTGRES_PASSWORD' not in os.environ:
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from tornado.httpclient import HTTPClientError
+from tornado.httpclient import AsyncHTTPClient, HTTPClientError
 from tornado.httpserver import HTTPServer
 from tornado.netutil import bind_sockets
 from tornado.web import Application
@@ -59,7 +59,7 @@ class GatewayNginxTests(unittest.IsolatedAsyncioTestCase):
                 root = Path(folder)
                 (root / 'logs').mkdir()
                 secret = root / 'secret'; secret.write_text('b'*64); secret.chmod(0o600)
-                console = root / 'console.lua'; console.write_text('-- synthetic console hook\n')
+                console = root / 'console.lua'; console.write_text("if ngx.var.uri == '/d/phonea/' then ngx.print('console ok'); ngx.exit(ngx.HTTP_OK) end\n")
                 app = Application([(r'/__bk_gateway',gateway.GatewayAdmissionHandler), (r'/d/phonea/ws',Echo)])
                 sockets = bind_sockets(0, address='127.0.0.1')
                 backend_port = sockets[0].getsockname()[1]
@@ -112,6 +112,8 @@ http {{ access_log off;
                                 self.fail('isolated nginx failed to start: ' + process.stderr.read(4096).decode(errors='replace'))
                             await asyncio.sleep(.05)
                     else: self.fail('isolated nginx did not start')
+                    response = await AsyncHTTPClient().fetch(f'http://127.0.0.1:{proxy_port}/d/phonea/')
+                    self.assertEqual(response.body, b'console ok')
                     url = f'ws://127.0.0.1:{proxy_port}/d/phonea/ws'
                     ws = await asyncio.wait_for(websocket_connect(url), 5)
                     await ws.write_message('synthetic'); self.assertEqual(await ws.read_message(), 'synthetic')
@@ -150,5 +152,6 @@ http {{ access_log off;
                 process.terminate()
                 try: process.wait(timeout=5)
                 except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
+                if process.stderr is not None: process.stderr.close()
             engine.dispose()
             temporary.cleanup()

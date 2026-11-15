@@ -39,4 +39,9 @@ end
 ngx.ctx.bk_gateway_connection = {domain=domain, connection_id=id}
 
 -- Preserve the existing HTML replacement and leave its authorization intact.
-return dofile(ngx.var.bk_device_console_file)
+local console, err = loadfile(ngx.var.bk_device_console_file)
+if not console then
+    ngx.log(ngx.ERR, 'cannot load device console: ', err)
+    return ngx.exit(ngx.HTTP_SERVICE_UNAVAILABLE)
+end
+return console()

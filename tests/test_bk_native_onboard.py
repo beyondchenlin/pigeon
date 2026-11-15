@@ -88,9 +88,19 @@ class OnboardingTests(unittest.TestCase):
         device = Mock()
         device.execute_script.return_value = self.reply()
         device.upload_file.side_effect = TimeoutError()
-        with self.assertRaises(TimeoutError):
+        with self.assertRaises(onboard.PreInstallError):
             onboard.provision(device, ROOT / 'ops', request_id='d' * 32)
         self.assertEqual(1, device.execute_script.call_count)
+
+    def test_probe_failure_is_pre_install_but_installer_timeout_is_uncertain(self):
+        device = Mock()
+        device.execute_script.side_effect = [self.reply(), TimeoutError()]
+        with self.assertRaises(onboard.PreInstallError):
+            onboard.provision(device, ROOT / 'ops', request_id='a' * 32)
+        device = Mock()
+        device.execute_script.side_effect = [self.reply(), self.reply({'state': 'connected'}), TimeoutError()]
+        with self.assertRaises(TimeoutError):
+            onboard.provision(device, ROOT / 'ops', request_id='b' * 32)
 
     def test_stage_path_is_never_user_controlled(self):
         device = Mock()

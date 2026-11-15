@@ -91,6 +91,16 @@ class CoordinatorTests(unittest.TestCase):
         self.dispatch.assert_not_called()
         coordinator.open_device.assert_not_called()
 
+    def test_pre_install_failure_releases_control_without_dispatch(self):
+        identity = str(uuid.uuid4())
+        with patch.object(coordinator, 'provision', side_effect=coordinator.PreInstallError('probe failed')):
+            self.assertEqual('not_ready', coordinator.onboard('phone1', 1, identity)['state'])
+        self.dispatch.assert_not_called()
+        with self.scope() as session:
+            row = session.query(NativeReload).filter_by(device_id=1).one()
+            self.assertEqual('not_sent', row.phase)
+            self.assertFalse(reload_busy(session, 1))
+
     def test_uncertain_install_stays_blocked_and_is_not_replayed(self):
         identity=str(uuid.uuid4())
         with patch.object(coordinator,'provision',side_effect=TimeoutError()) as provision, \

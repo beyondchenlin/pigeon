@@ -9,7 +9,7 @@ from executor.models import Device, UserDevice, session_scope
 from .bk_device_channel import open_device
 from .bk_native_gateway_health import check_gateway
 from .bk_native_gateway import remove_dead_worker_connections
-from .bk_native_onboard import provision
+from .bk_native_onboard import PreInstallError, provision
 from .bk_native_restart import prepare as prepare_restart, dispatch as dispatch_restart
 from .bk_native_reload import NativeReload, reserve, begin_dispatch, observe
 
@@ -202,6 +202,11 @@ def onboard(domain, user_id, request_id):
             accepted = False
         outcome = 'accepted' if accepted else 'unknown'
         return {'state': _record(device_id, request_id, outcome), 'attempt_id': request_id}
+    except PreInstallError:
+        # The installer and reload were never invoked. Keep the staging evidence,
+        # but release this attempt so manual control remains available.
+        _not_sent(device_id, request_id)
+        return {'state': 'not_ready', 'attempt_id': request_id}
     except Exception:
         # An uncertain installation is not replayed and leaves admission shut.
         logging.warning('Native onboarding attempt is unconfirmed')
