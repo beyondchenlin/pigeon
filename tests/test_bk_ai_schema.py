@@ -3,12 +3,17 @@ import os
 import unittest
 import uuid
 from sqlalchemy import create_engine, text, inspect
+from executor.models import Device, User
 from server.bk_ai_store import ensure_schema
 
 
 class ReceiptSchemaTests(unittest.TestCase):
     def check_migration(self, engine):
         with engine.begin() as connection:
+            # An existing Pigeon installation already has the two parent tables
+            # referenced by the gateway and reload receipts.
+            Device.__table__.create(connection)
+            User.__table__.create(connection)
             connection.execute(text('CREATE TABLE bk_ai_task (id VARCHAR(36) PRIMARY KEY, goal TEXT, snapshot JSON)'))
             connection.execute(text("INSERT INTO bk_ai_task VALUES ('old-task','old goal','{\"status\":\"running\"}')"))
         ensure_schema(engine)
