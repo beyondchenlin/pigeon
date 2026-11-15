@@ -27,6 +27,7 @@ async function handleApi(req, path) {
     case '/api/v1/device/phonea/ai/manual-control':
       if (JSON.parse(body).action === 'claim' && activePhoneTask) return { state:'ai', task_id:receipt.task_id };
       return { state: JSON.parse(body).action === 'release' ? 'watching' : 'held' };
+    case '/api/v1/device/phonea/ai/tasks/' + receipt.task_id + '/takeover': activePhoneTask = false; return {status:'cancelled'};
     case '/api/v1/ai/models': return { user_id:1, models:[{ id:1, provider:'openai', name:'测试模型' }] };
     case '/api/v1/ai/jobs': return { jobs:[] };
     case '/api/v1/ai/chat/plan': return { clarification:'请补充任务说明' };
@@ -90,11 +91,17 @@ try {
  assert.equal(await ev(`window.sentTouches.length`),0);
  assert.ok(!requests.some(r=>r.path.endsWith('/takeover')));
  await wait(`document.querySelector('.control-indicator')?.textContent === '仅观看'`);
- activePhoneTask = false;
+ await ev(`window.confirm=()=>true;true`);
+ await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...rect});
+ await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...rect});
+ await wait(`document.querySelector('.control-indicator')?.textContent === '人工接管中'`);
+ assert.equal(await ev(`window.sentTouches.length`),0);
+ assert.equal(requests.filter(r=>r.path.endsWith('/takeover')).length,1);
+ await wait(`document.querySelector('.control-indicator')?.textContent === '仅观看'`);
  await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...rect});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...rect});
  await wait(`window.sentTouches.some(x=>x.action==='up')`);assert.deepEqual(await ev(`window.sentTouches.filter(x=>x.action==='down'||x.action==='up').map(x=>x.action)`),['down','up']);assert.equal(await ev(`document.querySelector('.device-workbench').classList.contains('workbench-clean')`),false);
  await wait(`document.querySelector('.control-indicator')?.textContent === '仅观看'`);
- assert.equal(requests.filter(r=>r.path.endsWith('/manual-control') && r.body.action === 'release').length,2);
+ assert.equal(requests.filter(r=>r.path.endsWith('/manual-control') && r.body.action === 'release').length,3);
  await ev(`document.querySelector('button[aria-label="进入纯画面"]').click()`);assert.equal(await ev(`document.querySelector('.device-workbench').classList.contains('workbench-clean')`),true);await ev(`document.querySelector('button[aria-label="退出纯画面"]').click()`);assert.equal(await ev(`document.querySelector('.device-workbench').classList.contains('workbench-clean')`),false);
  await ev(`window.initialCanvas = document.querySelector('canvas[aria-label="手机实时远控画面"]'); true`);
  async function clickTab(name) {

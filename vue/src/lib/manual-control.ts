@@ -47,21 +47,31 @@ export function useManualControl(deviceId: Ref<string>, online: Ref<boolean>, in
     };
     claiming = (async () => {
       try {
-        const reply = await request('claim');
+        let reply = await request('claim');
         if (session !== own) return false;
+        let stoppedTask = false;
         if (reply?.state === 'ai' && reply.task_id) {
-          if (window.confirm('AI 正在操作这台手机。停止这次任务并接管手机？')) {
-            await apiRequest('/api/v1/device/' + encodeURIComponent(deviceId.value) + '/ai/tasks/' + reply.task_id + '/takeover',
-              { method: 'POST', headers, body: '{}' });
-            notify('已请求停止 AI。确认任务结束后，请在新画面上操作。');
+          const task = reply.task_id;
+          if (!window.confirm('AI 正在操作这台手机。停止这次任务并接管手机？') || session !== own) return false;
+          notify('正在等待 AI 停止…');
+          await apiRequest('/api/v1/device/' + encodeURIComponent(deviceId.value) + '/ai/tasks/' + task + '/takeover',
+            { method: 'POST', headers, body: '{}', signal: AbortSignal.timeout(12000) });
+          const until = Date.now() + 12000;
+          while (session === own) {
+            reply = await request('claim');
+            if (reply?.state !== 'ai' || reply.task_id !== task || Date.now() >= until) break;
+            await new Promise(resolve => setTimeout(resolve, 650));
           }
-          return false;
+          if (session !== own) return false;
+          if (reply?.state === 'ai') { notify('AI 仍在执行，本次操作未发送。'); return false; }
+          stoppedTask = true;
         }
         if (reply?.state !== 'held') {
           notify(reply?.state === 'manual' ? '其他会话正在接管手机，本次操作未发送。' : '手机当前不可接管，本次操作未发送。');
           return false;
         }
         held.value = true;
+        if (stoppedTask) notify('AI 已停止，已接管。请在当前画面上操作。');
         activity();
         heartbeat = setInterval(async () => {
           if (session !== own || renewing) return;
@@ -72,7 +82,8 @@ export function useManualControl(deviceId: Ref<string>, online: Ref<boolean>, in
           } catch { if (session === own) release(); }
           finally { if (session === own) renewing = false; }
         }, 3500);
-        return true;
+        // The screen may have changed during cancellation. Discard that original input.
+        return !stoppedTask;
       } catch { if (session === own) notify('未能确认接管，本次操作未发送。'); return false; }
       finally { if (session === own) { claiming = undefined; if (!held.value) release(); } }
     })();
