@@ -234,7 +234,7 @@ def reconcile(task_id, submit=False):
             if execution:
                 payload['execution'] = execution
             reply = (call(domain, 'POST', '/api/v1/tasks', payload, create_native=True,
-                          **({'create_info': native_info} if release_package_enabled() or native_info != NATIVE_INFO else {}))
+                          **({'create_info': native_info} if release_package_enabled(domain) or native_info != NATIVE_INFO else {}))
                      if native_selected else call(domain, 'POST', '/api/v1/tasks', payload))
             apply_reply(task_id, reply, submitting=True)
         else:
@@ -564,6 +564,16 @@ class NativeOnboardHandler(AiHandler):
         body = self.body()
         if set(body) != {'request_id'} or not isinstance(body.get('request_id'), str):
             self.throw(400, 'BK_ONBOARD', 'request_id is required')
+        from .bk_bridge_policy import enrolled
+        if domain in enrolled():
+            # The online worker owns this device's install/reload receipt.
+            # An open task page polls status without staging a second copy.
+            try:
+                if str(uuid.UUID(body['request_id'])) != body['request_id']:
+                    raise ValueError()
+            except ValueError:
+                self.throw(400, 'BK_ONBOARD', 'Invalid request')
+            return await NativeDiscoveryHandler.get(self, domain)
         from .bk_native_coordinator import onboard
         try:
             result = await asyncio.get_running_loop().run_in_executor(
@@ -600,6 +610,11 @@ def start_with_polling(http, original_start, **settings):
                 fleet_callback = PeriodicCallback(bk_fleet.poll, 2000)
                 fleet_callback.start()
                 http._bk_fleet_poll = fleet_callback
+                from .bk_bridge_updates import BridgeUpdates
+                updates = BridgeUpdates()
+                bridge_callback = PeriodicCallback(updates.poll, 5000)
+                bridge_callback.start()
+                http._bk_bridge_poll = bridge_callback
             loop.add_callback(begin)
         return original_run(loop)
     BaseAsyncIOLoop.start = run

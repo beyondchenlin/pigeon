@@ -15,6 +15,20 @@ class OnboardingTests(unittest.TestCase):
     def reply(self, body=None, exitstatus=0):
         return SimpleNamespace(exitstatus=exitstatus, stdout=json.dumps(body or {}).encode())
 
+    def test_background_install_is_independent_of_app_and_confirm_never_installs(self):
+        device = Mock()
+        device.execute_script.side_effect = [self.reply(), self.reply({'installed': True, 'restart_required': True}),
+                                            self.reply(exitstatus=1), self.reply()]
+        result = onboard.provision(device, ROOT / 'ops', bridge_only=True)
+        self.assertEqual('reload_required', result['state'])
+        self.assertNotIn('am start', str(device.execute_script.call_args_list))
+        device.reset_mock()
+        device.execute_script.side_effect = [self.reply({'installed': True, 'restart_required': False})]
+        result = onboard.provision(device, ROOT / 'ops', bridge_only=True, confirm_guard=True)
+        self.assertEqual('connected', result['state'])
+        device.upload_file.assert_not_called()
+        self.assertEqual(1, device.execute_script.call_count)
+
     def test_success_requires_confirmed_live_guard(self):
         device = Mock()
         device.execute_script.side_effect = [self.reply(), self.reply({'state': 'connected'}),

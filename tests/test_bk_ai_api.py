@@ -105,8 +105,17 @@ class NativeOnboardApiTests(AsyncHTTPTestCase):
             def get_login_user_device(self, domain):
                 if self.request.headers.get('X-Test-Auth') != 'owner':
                     self.throw(401, 'AUTH', 'unauthorized')
-                return SimpleNamespace(id=1), SimpleNamespace(id=1, domain=domain)
+                return SimpleNamespace(id=1), SimpleNamespace(id=1, domain=domain, state='online')
         return Application([(r'/api/v1/device/([a-z0-9]+)/ai/native-onboard', Handler)], ctl=None)
+
+    def test_enrolled_device_page_observes_pending_background_install(self):
+        with patch('server.bk_bridge_policy.enrolled', return_value={'phonea': 1}), \
+                patch.object(api, 'native_onboarding_busy', return_value=True), \
+                patch('server.bk_native_coordinator.onboard') as install:
+            response = self.fetch('/api/v1/device/phonea/ai/native-onboard', method='POST',
+                                  headers={'X-Test-Auth':'owner'}, body=json.dumps({'request_id':str(uuid.uuid4())}))
+            self.assertEqual({'state': 'onboarding'}, json.loads(response.body)['data'])
+            install.assert_not_called()
 
     def test_authorized_onboarding_only(self):
         from server import bk_native_coordinator as coordinator

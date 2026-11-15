@@ -59,6 +59,31 @@ class NativeRestartTests(unittest.TestCase):
         launch.assert_called_once()
         self.assertEqual('launched',json.loads(self.receipt.read_text())['state'])
 
+    def test_shutdown_stall_will_not_intervene_if_service_pidfile_exists(self):
+        (self.user/'lamda.pid').write_text('999')
+        with patch('bk_lifecycle_monitor.release') as release:
+            self.assertFalse(restart.release_shutdown_stall(self.user, self.runtime, 12345, '42'))
+            release.assert_not_called()
+
+    def test_first_install_requires_the_official_executable_and_mapped_runtime(self):
+        pid = 12345
+        proc = self.root/'proc'
+        entry = proc/str(pid)
+        entry.mkdir(parents=True)
+        (self.user/'lamda.pid').write_text(str(pid))
+        (self.guard/'state.json').write_text('{"ai":null,"manual":[]}')
+        (self.guard.parent/'bk-native-bridge-install.json').write_text(json.dumps({
+            'installed': True, 'reload_needed': True, 'prior_guard': {'pid': None, 'identity': None}}))
+        (entry/'exe').symlink_to(self.runtime/'bin/python3')
+        (entry/'cmdline').write_bytes(b'lamda\0')
+        (entry/'maps').write_text('0000-1000 r-xp 0 0 0 /wrong/runtime')
+        (entry/'stat').write_text('12345 (lamda) ' + ' '.join(['x']*19 + ['42']))
+        with patch.dict(os.environ, {'ROOTDIR': str(self.runtime)}):
+            with self.assertRaises(ValueError):
+                restart.inspect_guard(self.user, proc, uid=os.getuid())
+            (entry/'maps').write_text('0000-1000 r-xp 0 0 0 ' + str(self.runtime/'lib/python3.12/site-packages/lamda/web/bundle.cpython-312.so'))
+            self.assertEqual(restart.inspect_guard(self.user, proc, uid=os.getuid()), (pid,'42'))
+
     def test_mismatched_guard_never_signals_or_launches(self):
         with patch.object(restart,'inspect_guard',return_value=(12345,'43')), \
              patch.object(restart.os,'kill') as kill, patch.object(restart.time,'sleep'), \

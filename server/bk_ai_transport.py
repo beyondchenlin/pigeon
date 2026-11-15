@@ -14,8 +14,9 @@ RELEASE_INFO = '/sdcard/Android/data/' + RELEASE_PACKAGE + '/files/mcp-usb.json'
 NATIVE_INFO_BY_PACKAGE = {PILOT_PACKAGE: NATIVE_INFO, RELEASE_PACKAGE: RELEASE_INFO}
 
 
-def release_package_enabled():
-    return os.environ.get('BK_CLAW_RELEASE_PACKAGE_ENABLED') == '1'
+def release_package_enabled(domain=None):
+    from .bk_bridge_policy import enrolled
+    return os.environ.get('BK_CLAW_RELEASE_PACKAGE_ENABLED') == '1' or (domain is not None and domain in enrolled())
 
 
 def evidence_batch_request(method, path, body):
@@ -122,7 +123,7 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
     if discover_native:
         if method != 'GET' or path != '/api/v1/native-discovery' or body is not None:
             raise TransportError('invalid_discovery')
-        config = dict(config, info='auto' if release_package_enabled() else NATIVE_INFO)
+        config = dict(config, info='auto' if release_package_enabled(domain) else NATIVE_INFO)
     prepare = method == 'POST' and path == '/api/v1/tasks' and config.get('prepare_unsecured', False)
     request = dict(method=method, path=path, body=body, info=config['info'], prepare_unsecured=prepare)
     if create_info is not None:

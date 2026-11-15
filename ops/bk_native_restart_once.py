@@ -44,6 +44,33 @@ def inspect_guard(user, proc=Path('/proc'), uid=2000):
         raise ValueError('linked guard state')
     state = json.loads((root / 'state.json').read_text())
     pid, start = state.get('guard_pid'), state.get('guard_identity')
+    if pid is None and start is None and not state.get('guard_protocol'):
+        # First installation has no prior guard. Pin the official live service
+        # by its shell-owned PID, exact interpreter and mapped FIRERPA library.
+        manifest = user / 'phone-pilot' / 'bk-native-bridge-install.json'
+        if manifest.is_symlink():
+            raise ValueError('linked install manifest')
+        installed = json.loads(manifest.read_text())
+        if (installed.get('reload_needed') is not True or installed.get('installed') is not True
+                or installed.get('prior_guard') != {'pid': None, 'identity': None}
+                or state.get('ai') or state.get('manual')):
+            raise ValueError('first installation unconfirmed')
+        pidfile = user / 'lamda.pid'
+        if pidfile.is_symlink():
+            raise ValueError('linked official PID')
+        pid = int(pidfile.read_text().strip())
+        process = proc / str(pid)
+        runtime = Path(os.environ['ROOTDIR']).resolve()
+        library = runtime / 'lib/python3.12/site-packages/lamda/web/bundle.cpython-312.so'
+        if (pid <= 1 or pid == os.getpid() or process.stat().st_uid != uid
+                or (process / 'exe').resolve() != (runtime / 'bin/python3').resolve()
+                or (process / 'cmdline').read_bytes().split(b'\x00', 1)[0] != b'lamda'
+                or not any(line.endswith(' ' + str(library)) for line in (process / 'maps').read_text().splitlines())):
+            raise ValueError('unverified first-install process')
+        start = identity(pid, proc)
+        if not start or not start.isdecimal():
+            raise ValueError('official process disappeared')
+        return pid, start
     if (type(pid) is not int or pid <= 1 or pid == os.getpid() or not isinstance(start, str)
             or not start.isdecimal() or state.get('ai') or state.get('manual')
             or state.get('guard_protocol') != {'version': 2, 'pid': pid, 'identity': start}):
@@ -65,6 +92,24 @@ def write_receipt(path, body):
         os.replace(name, path)
     finally:
         if os.path.exists(name): os.unlink(name)
+
+
+def release_shutdown_stall(user, runtime, pid, start):
+    """After a confirmed shutdown request, unblock only a proven pre-exec child."""
+    from bk_lifecycle_monitor import Proc, release
+    if (user / 'lamda.pid').exists():
+        return False
+    proc = Proc()
+    parent = proc.identity(pid)
+    if parent.uid != os.getuid() or parent.ticks != start or parent.exe != str((runtime / 'bin/python3').resolve()):
+        return False
+    matches = proc.candidates(parent)
+    if len(matches) != 1:
+        return False
+    time.sleep(1)
+    if (user / 'lamda.pid').exists() or not proc.same(parent):
+        return False
+    return release(proc, parent, matches[0]) in ('released_term', 'released_kill', 'already_exited')
 
 
 def worker(user, runtime, attempt, expected_pid, expected_start):
@@ -93,7 +138,18 @@ def worker(user, runtime, attempt, expected_pid, expected_start):
         deadline = time.monotonic() + 40
         while identity(pid) == start and time.monotonic() < deadline:
             time.sleep(1)
-        if identity(pid) == start:
+        still_running = identity(pid) == start
+        if still_running:
+            try:
+                released = release_shutdown_stall(user, runtime, pid, start)
+            except (OSError, ValueError, ImportError):
+                released = False
+            if released:
+                deadline = time.monotonic() + 15
+                while identity(pid) == start and time.monotonic() < deadline:
+                    time.sleep(.5)
+                still_running = identity(pid) == start
+        if still_running:
             body['state'] = 'exit_unconfirmed'; write_receipt(receipt, body); return
         pidfile = user / 'lamda.pid'
         if pidfile.is_file():

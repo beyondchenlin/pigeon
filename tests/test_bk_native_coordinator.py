@@ -111,6 +111,20 @@ class CoordinatorTests(unittest.TestCase):
         self.dispatch.assert_not_called()
         with self.scope() as session: self.assertTrue(reload_busy(session,1))
 
+    def test_managed_missing_file_with_incomplete_upload_releases_unsent_reservation(self):
+        from types import SimpleNamespace
+        identity = str(uuid.uuid4())
+        with patch.object(coordinator, 'provision', side_effect=TimeoutError()) as install:
+            self.assertEqual('install_unconfirmed', coordinator.onboard('phone1', 1, identity, bridge_only=True)['state'])
+            self.phone.execute_script.return_value = SimpleNamespace(exitstatus=0, stdout=b'incomplete\n')
+            with patch('server.bk_bridge_updates.installed_state', return_value='missing'), \
+                 patch('server.bk_bridge_updates.desired_files', return_value={}):
+                result = coordinator.onboard('phone1', 1, str(uuid.uuid4()), bridge_only=True)
+            self.assertEqual('not_ready', result['state'])
+            install.assert_called_once()
+            self.dispatch.assert_not_called()
+            with self.scope() as session: self.assertFalse(reload_busy(session, 1))
+
     def test_complete_stage_can_resume_without_reinstall_or_duplicate_restart(self):
         identity=str(uuid.uuid4())
         with patch.object(coordinator,'provision',return_value={'state':'reload_required'}) as provision, \

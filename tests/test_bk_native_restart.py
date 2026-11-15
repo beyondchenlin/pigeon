@@ -23,7 +23,7 @@ class RestartDispatchTests(unittest.TestCase):
         self.device.execute_script.side_effect = [self.reply(), self.reply(output=b'{"state":"ready"}'),
             self.reply(output=('{"state":"prepared","attempt":"' + self.attempt + '"}').encode())]
         command=restart.prepare(self.device,self.bundle,self.attempt)
-        self.assertEqual(2,self.device.upload_file.call_count)
+        self.assertEqual(len(restart.FILES),self.device.upload_file.call_count)
         self.assertTrue(restart.dispatch(self.device,command,self.attempt))
         self.assertEqual(3,self.device.execute_script.call_count)
 

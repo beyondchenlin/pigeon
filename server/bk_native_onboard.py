@@ -43,9 +43,36 @@ def _python_command(script, args):
     return 'export PYTHONDONTWRITEBYTECODE=1 LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" ' + shlex.join([script, *args])
 
 
-def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_guard=False):
+def confirm_bridge(device, bundle):
+    """Confirm the installed release in place, without uploading or installing it again."""
+    source = (Path(bundle) / 'install_bk_native_bridge.py').read_text()
+    # Use the trusted server installer and check against the desired release
+    # as well as the phone's ownership manifest. Do not execute a stale bridge.
+    checks = {n: hashlib.sha256((Path(bundle) / n).read_bytes()).hexdigest() for n in FILES[1:]}
+    check = """
+user = Path(os.environ['USRDIR'])
+modules = user / 'modules'
+for source, targets in FILES.items():
+    for name in targets:
+        path = modules / name
+        if path.is_symlink() or digest(path.read_bytes()) != expected[source]:
+            raise ValueError('wrong installed bridge')
+print(json.dumps(confirm_activation(user, modules)))
+"""
+    script = ("__name__ = 'installer'\nexpected = " + repr(checks) + "\n" + source + "\n" + check)
+    reply = device.execute_script(_python_command('-c', [script]), timeout=15)
+    if reply.exitstatus != 0:
+        return {'state': 'waiting_reconnect'}
+    value = _result(reply)
+    return {'state': 'connected' if value.get('restart_required') is False and value.get('installed') is True else 'waiting_reconnect'}
+
+
+def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_guard=False,
+              bridge_only=False, discover_release=False):
     """Stage and validate one bundle. A live guard reload is confirmed separately."""
     bundle = Path(bundle_dir)
+    if bridge_only and confirm_guard:
+        return confirm_bridge(device, bundle)
     files = {}
     for name in FILES:
         source = bundle / name
@@ -57,48 +84,52 @@ def provision(device, bundle_dir, *, request_id=None, start_app=False, confirm_g
         raise OnboardError('invalid_request')
     stage = '/data/local/tmp/bk-native-onboard-' + identity
     # mkdir, not mkdir -p: a prior uncertain attempt must not be reused.
-    result = device.execute_script('umask 077; mkdir ' + shlex.quote(stage), timeout=10)
+    try:
+        result = device.execute_script('umask 077; mkdir ' + shlex.quote(stage), timeout=10)
+    except Exception as error:
+        raise PreInstallError('staging_unavailable') from error
     if result.exitstatus != 0:
-        raise OnboardError('staging_unavailable')
+        raise PreInstallError('staging_unavailable')
     complete = False
     installer_started = False
     try:
         for name in FILES:
             device.upload_file(str(bundle / name), stage + '/' + name)
-        if os.environ.get('BK_CLAW_RELEASE_PACKAGE_ENABLED') == '1':
-            probe_code = ("import sys,json;sys.path.insert(0,sys.argv[1]);from bk_native_mcp import discover;"
-                          "print(json.dumps(discover()))")
-        else:
-            probe_code = ("import sys,json;sys.path.insert(0,sys.argv[1]);from bk_native_mcp import probe;"
-                          "print(json.dumps(probe('/sdcard/Android/data/com.beyondchenlin.bk101.nativemcp/files/mcp-usb.json')))")
-        cmd = ('export PYTHONDONTWRITEBYTECODE=1 LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" -c '
-               + shlex.quote(probe_code) + ' ' + shlex.quote(stage))
-        probe = _result(device.execute_script(cmd, timeout=15))
-        if probe.get('state') == 'not_ready' and start_app:
-            # Opening the installed app starts its normal service; it does not
-            # change the user's MCP switch or permissions. Never replay an
-            # uncertain launch and never open the app during reconciliation.
-            package = probe.get('package', 'com.beyondchenlin.bk101.nativemcp')
-            if package not in ('com.beyondchenlin.bk101.nativemcp', 'com.beyondchenlin.bkclaw'):
-                raise OnboardError('invalid_package')
-            opened = device.execute_script(
-                'am start -n ' + package + '/com.wangzan101.mika.ui.MainActivity', timeout=10)
-            if opened.exitstatus == 0:
-                time.sleep(2)
-                probe = _result(device.execute_script(cmd, timeout=15))
-        if probe.get('state') != 'connected':
-            confirmed = False
-            if confirm_guard:
-                reply = device.execute_script(
-                    _python_command(stage + '/install_bk_native_bridge.py', ['--confirm']), timeout=15)
-                if reply.exitstatus == 0:
-                    value = _result(reply)
-                    confirmed = value.get('installed') is True and value.get('restart_required') is False
-            complete = True
-            result = {'state': probe.get('state') if probe.get('state') in
-                      ('not_installed', 'not_ready', 'auth_failed', 'incompatible') else 'not_ready'}
-            if confirmed: result['guard_confirmed'] = True
-            return result
+        if not bridge_only:
+            if discover_release or os.environ.get('BK_CLAW_RELEASE_PACKAGE_ENABLED') == '1':
+                probe_code = ("import sys,json;sys.path.insert(0,sys.argv[1]);from bk_native_mcp import discover;"
+                              "print(json.dumps(discover()))")
+            else:
+                probe_code = ("import sys,json;sys.path.insert(0,sys.argv[1]);from bk_native_mcp import probe;"
+                              "print(json.dumps(probe('/sdcard/Android/data/com.beyondchenlin.bk101.nativemcp/files/mcp-usb.json')))")
+            cmd = ('export PYTHONDONTWRITEBYTECODE=1 LD_LIBRARY_PATH="$ROOTDIR/lib"; exec "$ROOTDIR/bin/python3" -c '
+                   + shlex.quote(probe_code) + ' ' + shlex.quote(stage))
+            probe = _result(device.execute_script(cmd, timeout=15))
+            if probe.get('state') == 'not_ready' and start_app:
+                # Opening the installed app starts its normal service; it does not
+                # change the user's MCP switch or permissions. Never replay an
+                # uncertain launch and never open the app during reconciliation.
+                package = probe.get('package', 'com.beyondchenlin.bk101.nativemcp')
+                if package not in ('com.beyondchenlin.bk101.nativemcp', 'com.beyondchenlin.bkclaw'):
+                    raise OnboardError('invalid_package')
+                opened = device.execute_script(
+                    'am start -n ' + package + '/com.wangzan101.mika.ui.MainActivity', timeout=10)
+                if opened.exitstatus == 0:
+                    time.sleep(2)
+                    probe = _result(device.execute_script(cmd, timeout=15))
+            if probe.get('state') != 'connected':
+                confirmed = False
+                if confirm_guard:
+                    reply = device.execute_script(
+                        _python_command(stage + '/install_bk_native_bridge.py', ['--confirm']), timeout=15)
+                    if reply.exitstatus == 0:
+                        value = _result(reply)
+                        confirmed = value.get('installed') is True and value.get('restart_required') is False
+                complete = True
+                result = {'state': probe.get('state') if probe.get('state') in
+                          ('not_installed', 'not_ready', 'auth_failed', 'incompatible') else 'not_ready'}
+                if confirmed: result['guard_confirmed'] = True
+                return result
         installer_started = True
         installed = _result(device.execute_script(
             _python_command(stage + '/install_bk_native_bridge.py', []), timeout=25))

@@ -7,6 +7,7 @@ import uuid
 
 from executor.models import Device, UserDevice, session_scope
 from .bk_device_channel import open_device
+from .bk_ai_transport import release_package_enabled
 from .bk_native_gateway_health import check_gateway
 from .bk_native_gateway import remove_dead_worker_connections
 from .bk_native_onboard import PreInstallError, provision
@@ -47,7 +48,7 @@ def _record(device_id, attempt_id, outcome):
         return 'connected' if outcome == 'verified' else 'waiting_reconnect'
 
 
-def _reconcile(domain, user_id, device_id, attempt_id):
+def _reconcile(domain, user_id, device_id, attempt_id, *, bridge_only=False):
     """Only inspect and confirm; never submit a second reload."""
     try:
         with session_scope() as session:
@@ -63,8 +64,10 @@ def _reconcile(domain, user_id, device_id, attempt_id):
             locked = bool(device._acquire_lock(leaseTime=300))
             if not locked:
                 return {'state': 'waiting_reconnect', 'attempt_id': attempt_id}
-            device.device_info()
-            result = provision(device, BUNDLE_DIR, confirm_guard=True)
+            if not bridge_only:
+                device.device_info()
+            result = provision(device, BUNDLE_DIR, confirm_guard=True, bridge_only=bridge_only,
+                               discover_release=release_package_enabled(domain))
         finally:
             if locked:
                 try: device._release_lock()
@@ -81,7 +84,7 @@ def _reconcile(domain, user_id, device_id, attempt_id):
     return {'state': 'waiting_reconnect', 'attempt_id': attempt_id}
 
 
-def _resume_reserved(domain, user_id, device_id, attempt_id):
+def _resume_reserved(domain, user_id, device_id, attempt_id, *, bridge_only=False):
     """Resume only a complete, verified stage; never upload or replay it."""
     device = None
     locked = False
@@ -94,7 +97,37 @@ def _resume_reserved(domain, user_id, device_id, attempt_id):
         if not locked:
             return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
         restart_id = uuid.UUID(attempt_id).hex
-        command = prepare_restart(device, BUNDLE_DIR, restart_id, reuse=True)
+        reuse = True
+        if bridge_only:
+            # Only this reservation can send the signal, and only after a
+            # committed begin_dispatch. Inspect the phone under its RPC lock.
+            with session_scope() as session:
+                if _phase(session, device_id, attempt_id) != 'reserved':
+                    return {'state': 'waiting_reconnect', 'attempt_id': attempt_id}
+            from .bk_bridge_updates import desired_files, installed_state
+            installed = installed_state(device, desired_files())
+            if installed == 'current':
+                _not_sent(device_id, attempt_id)
+                return {'state': 'connected', 'attempt_id': attempt_id}
+            # A missing file from the upload stage proves the installer was
+            # never reached, unless cleanup completed (then inspect actual files).
+            from .bk_native_onboard import FILES
+            stage = '/data/local/tmp/bk-native-onboard-' + restart_id
+            restart = '/data/local/tmp/bk-native-restart-' + restart_id
+            probe = device.execute_script(
+                'if [ -e ' + restart + ' ]; then echo restart; elif ' +
+                ' && '.join('[ -f ' + stage + '/' + name + ' ]' for name in FILES) +
+                '; then echo staged; else echo incomplete; fi', timeout=8)
+            if probe.exitstatus != 0:
+                return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
+            progress = probe.stdout.strip()
+            if installed in ('missing', 'outdated') and progress == b'incomplete':
+                _not_sent(device_id, attempt_id)
+                return {'state': 'not_ready', 'attempt_id': attempt_id}
+            if installed != 'pending_activation' or progress not in (b'restart', b'staged', b'incomplete'):
+                return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
+            reuse = progress == b'restart'
+        command = prepare_restart(device, BUNDLE_DIR, restart_id, reuse=reuse)
         with session_scope() as session:
             current = _identity(session, domain, user_id)
             if current.state != 'online' or current.controlling or not check_gateway():
@@ -122,7 +155,7 @@ def _resume_reserved(domain, user_id, device_id, attempt_id):
             device.channel.close()
 
 
-def onboard(domain, user_id, request_id):
+def onboard(domain, user_id, request_id, *, bridge_only=False):
     try:
         if not isinstance(request_id, str) or str(uuid.UUID(request_id)) != request_id:
             raise ValueError()
@@ -141,8 +174,8 @@ def onboard(domain, user_id, request_id):
         else:
             old_id, phase = None, None
     if old_id:
-        return (_reconcile(domain, user_id, device_id, old_id)
-                if phase != 'reserved' else _resume_reserved(domain, user_id, device_id, old_id))
+        return (_reconcile(domain, user_id, device_id, old_id, bridge_only=bridge_only)
+                if phase != 'reserved' else _resume_reserved(domain, user_id, device_id, old_id, bridge_only=bridge_only))
     # The operator can disable new automatic restarts without affecting
     # reconciliation of a request that was already dispatched.
     if os.environ.get('BK_NATIVE_AUTO_RELOAD', 'verified') != 'verified':
@@ -173,8 +206,14 @@ def onboard(domain, user_id, request_id):
         if not locked:
             _not_sent(device_id, request_id)
             return {'state': 'waiting_for_idle', 'attempt_id': request_id}
-        device.device_info()
-        result = provision(device, BUNDLE_DIR, request_id=uuid.UUID(request_id).hex, start_app=True)
+        with session_scope() as session:
+            if _phase(session, device_id, request_id) != 'reserved':
+                return {'state': 'waiting', 'attempt_id': request_id}
+        if not bridge_only:
+            device.device_info()
+        result = provision(device, BUNDLE_DIR, request_id=uuid.UUID(request_id).hex,
+                           start_app=not bridge_only, bridge_only=bridge_only,
+                           discover_release=release_package_enabled(domain))
         state = result.get('state')
         if state != 'reload_required':
             _not_sent(device_id, request_id)

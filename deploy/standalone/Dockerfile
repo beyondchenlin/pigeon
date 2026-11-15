@@ -22,6 +22,7 @@ RUN echo 'b9a4f94d557d57ceec49bc21d26d2e144cc5191b2d9e26989be89275c6aefea8  /usr
     && ln -s /usr/lib/python3/dist-packages/executor/IPDB.BIN executor/IPDB.BIN
 COPY lua/ ./lua/
 COPY ops/install_bk_native_bridge.py ops/bk_ai_phone.py ops/bk_native_mcp.py ops/bk_ai_guard_extension.py ./bridge/
+COPY ops/bk_native_restart_once.py ops/bk_service_lifecycle.py ops/bk_lifecycle_monitor.py ./bridge/
 COPY deploy/pilot/wait_auth_then_frps.py ./
 COPY deploy/standalone/devices.json deploy/standalone/bootstrap.py ./
 COPY deploy/standalone/nginx.conf /usr/local/openresty/nginx/conf/nginx.conf

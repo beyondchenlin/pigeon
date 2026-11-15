@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import shlex
 
-FILES = ('bk_native_restart_once.py', 'bk_service_lifecycle.py')
+FILES = ('bk_native_restart_once.py', 'bk_service_lifecycle.py', 'bk_lifecycle_monitor.py')
 
 
 def prepare(device, bundle_dir, attempt, *, reuse=False):
