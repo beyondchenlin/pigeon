@@ -640,6 +640,8 @@ def install():
                               'server.bk_fleet', handler='FleetDraftHandler')
         self.http.add_handler(r'/api/v1/ai/models',
                               'server.bk_fleet', handler='FleetModelListHandler')
+        self.http.add_handler(r'/api/v1/ai/targets',
+                              'server.bk_fleet', handler='FleetTargetListHandler')
         self.http.add_handler(r'/api/v1/ai/jobs-summary',
                               'server.bk_fleet', handler='FleetJobSummaryHandler')
         self.http.add_handler(r'/api/v1/ai/jobs(?:/([0-9]+)(?:/(cancel))?)?',

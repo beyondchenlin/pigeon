@@ -75,8 +75,9 @@ class FleetFlowTests(AsyncHTTPTestCase):
         class Jobs(bk_fleet.FleetJobHandler): get_login_user = auth
         class Draft(bk_fleet.FleetDraftHandler): get_login_user = auth
         class Summary(bk_fleet.FleetJobSummaryHandler): get_login_user = auth
+        class Targets(bk_fleet.FleetTargetListHandler): get_login_user = auth
         return Application([(r'/chat', Chat), (r'/draft/([a-f0-9-]{36})', Draft),
-                            (r'/summary', Summary),
+                            (r'/summary', Summary), (r'/targets', Targets),
                             (r'/jobs(?:/([0-9]+)(?:/(cancel))?)?', Jobs)], ctl=None)
 
     def post_json(self, path, value):
@@ -120,6 +121,27 @@ class FleetFlowTests(AsyncHTTPTestCase):
         with self.sessions() as session:
             session.get(Job, job_id).state = 'bk_paused'
         self.assertEqual(json.loads(self.fetch('/summary').body)['data'], {'running':0, 'paused':1})
+
+    def test_target_card_respects_access_and_explicit_choice(self):
+        data = json.loads(self.fetch('/targets').body)['data']
+        self.assertEqual([d['domain'] for d in data['devices']], ['phonea'])
+        self.assertEqual(data['groups'][0]['count'], 1)
+        other = json.loads(self.fetch('/targets', headers={'X-Test-User':'2'}).body)['data']
+        self.assertEqual(other, {'devices':[], 'groups':[]})
+        draft_id = str(uuid.uuid4())
+        candidate = {'goal':'读取状态', 'target':{'kind':'group', 'name':'一组'}, 'schedule':{'kind':'now'}}
+        with patch.object(bk_fleet, 'interpret', return_value=candidate):
+            code, response = self.post_json('/chat', {'draft_id':draft_id, 'message':'读取状态\n补充：phonea',
+                'model_id':1, 'timezone':'Asia/Shanghai', 'selected_target':{'kind':'device', 'name':'phonea'}})
+        self.assertEqual(code, 200)
+        self.assertEqual(response['data']['plan']['target'], {'kind':'device', 'name':'phonea'})
+        with patch.object(bk_fleet, 'interpret', return_value=candidate):
+            code, response = self.post_json('/chat', {'draft_id':str(uuid.uuid4()), 'message':'读取状态\n补充：notowned',
+                'model_id':1, 'timezone':'Asia/Shanghai', 'selected_target':{'kind':'device', 'name':'notowned'}})
+        self.assertEqual(code, 200)
+        self.assertEqual(response['data']['clarification'], 'target_not_found')
+        with self.sessions() as s:
+            self.assertEqual(s.query(Job).count(), 0)
 
     def test_recurring_chat_preview_and_job_preserve_selected_schedule(self):
         for schedule, message in [({'kind':'weekly', 'at':'20:00', 'timezone':'Asia/Shanghai', 'weekday':1}, '让一组每周一20:00读取状态'),

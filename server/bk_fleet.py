@@ -101,7 +101,7 @@ class FleetPlanPreviewHandler(AiHandler):
 class FleetChatPlanHandler(AiHandler):
     async def post(self):
         body = self.body()
-        if (set(body) - {'message', 'model_id', 'timezone', 'execution', 'draft_id'}
+        if (set(body) - {'message', 'model_id', 'timezone', 'execution', 'draft_id', 'selected_target'}
                 or not {'message', 'model_id', 'timezone'}.issubset(body)
                 or type(body['model_id']) is not int or not isinstance(body['message'], str)
                 or not 1 <= len(body['message'].strip()) <= 4000):
@@ -154,6 +154,10 @@ class FleetChatPlanHandler(AiHandler):
                 self.save_result(draft_id, user.id, revision, question=candidate['clarification'])
                 self.tell({'draft_id': draft_id, 'clarification': candidate['clarification'], 'submitted': False})
                 return
+            if 'selected_target' in body:
+                # An explicit card selection is authoritative; the normal
+                # validation below still resolves it against current access.
+                candidate['target'] = body['selected_target']
             if 'execution' in body:
                 candidate['execution'] = body['execution']
             plan = validate_plan(candidate, devices, groups)
@@ -208,6 +212,20 @@ class FleetModelListHandler(AiHandler):
             models = session.query(ModelResource).filter_by(owner_id=user.id).order_by(ModelResource.id).all()
             self.tell({'user_id': user.id, 'models': [{'id': model.id, 'name': model.name, 'provider': model.provider}
                                                        for model in models]})
+
+
+class FleetTargetListHandler(AiHandler):
+    """Only names and IDs available to the current authenticated user."""
+    def get(self):
+        with session_scope() as session:
+            user = self.get_login_user(session=session)
+            rows = (session.query(Device, UserDevice).join(UserDevice, UserDevice.device_id == Device.id)
+                    .filter(UserDevice.user_id == user.id, Device.is_deleted == False).all())
+            devices = [{'domain': d.domain, 'name': d.comment or d.domain, 'state': d.state} for d, _ in rows]
+            groups = [{'id': g.id, 'name': g.name,
+                       'count': sum(1 for _, link in rows if link.group_id == g.id)}
+                      for g in session.query(Group).filter_by(owner_id=user.id).order_by(Group.id)]
+            self.tell({'devices': devices, 'groups': groups})
 
 
 class FleetJobSummaryHandler(AiHandler):

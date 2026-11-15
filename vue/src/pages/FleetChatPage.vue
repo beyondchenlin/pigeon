@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { Send, MessageSquare, Smartphone, Users, Settings2, Bot, ClipboardList, RefreshCw } from 'lucide-vue-next';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { apiRequest, ApiRequestError, formatApiError } from '@/lib/api';
 import { validateExecution, type BrowseExecution } from '@/lib/task-request.mjs';
@@ -17,10 +18,30 @@ type Job = {id: number; goal: string; state: string; next_at: number | null; sch
 type Pending = {request_id: string; plan: Plan};
 type Draft = {id: string; message: string; model_id: number; timezone: string; execution?: BrowseExecution;
   question?: string; plan?: Plan; state: string; job_id?: number};
+type Target = {domain:string; name:string; state:string};
+type TargetGroup = {id:number; name:string; count:number};
+type ChatMessage = {id:string; role:'user'|'assistant'; text:string; jobId?:number; selectedLabel?:string};
 
 const models = ref<Model[]>([]);
 const modelId = ref<number | ''>('');
 const message = ref('');
+const transcript = ref<ChatMessage[]>([]);
+const transcriptKey = ref('');
+const conversationText = ref('');
+const conversationPane = ref<HTMLElement | null>(null);
+const targets = ref<Target[]>([]);
+const groups = ref<TargetGroup[]>([]);
+const targetTab = ref<'device'|'group'>('device');
+const selectedTarget = ref<{kind:'device'|'group'; name:string; label:string} | null>(null);
+const awaitingTarget = ref(false);
+const showSettings = ref(false);
+const showTargetChoices = computed(() => awaitingTarget.value && !pending.value && !plan.value);
+function addMessage(role:'user'|'assistant', text:string, jobId?:number) {
+  transcript.value.push({id:crypto.randomUUID(), role, text, ...(jobId ? {jobId} : {})});
+  transcript.value = transcript.value.slice(-100);
+  try { if (transcriptKey.value) localStorage.setItem(transcriptKey.value, JSON.stringify(transcript.value)); } catch { /* Draft identity is managed separately. */ }
+  void nextTick(() => { if (conversationPane.value) conversationPane.value.scrollTop = conversationPane.value.scrollHeight; });
+}
 const browse = ref(false);
 const duration = ref<number | ''>(7200);
 const maxTokens = ref<number | ''>('');
@@ -57,7 +78,7 @@ const runs = ref<Run[]>([]);
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let mounted = true;
 const supportedModels = computed(() => models.value.filter(model => ['openai', 'openai_compatible', 'anthropic', 'ollama'].includes(model.provider)));
-watch([message, modelId, timezone, browse, duration, maxTokens, minObservations, minActive, maxStall],
+watch([modelId, timezone, browse, duration, maxTokens, minObservations, minActive, maxStall],
   () => { if (!pending.value) plan.value = null; }, {flush:'sync'});
 const postHeaders = {'X-Requested-With': 'BK-Task'};
 const stateText: Record<string, string> = {bk_running:'等待执行', bk_finished:'本次执行中', bk_done:'本次已结束', bk_stopped:'已停止后续', bk_paused:'需要处理',
@@ -104,27 +125,44 @@ async function refresh() {
   } catch (e) { error.value = formatApiError(e, '无法读取任务'); }
 }
 
-async function prepare() {
-  if (busy.value || pending.value || !message.value.trim() || !modelId.value || contractError.value) return;
+async function prepare(selection?: {kind:'device'|'group'; name:string; label:string}) {
+  const input = selection ? selection.label : message.value.trim();
+  if (busy.value || pending.value || !input || !modelId.value || contractError.value) return;
+  const fullMessage = conversationText.value ? `${conversationText.value}\n补充：${selection ? selection.name : input}` : input;
+  if (fullMessage.length > 4000) { error.value = '这段任务描述太长，请开启一项新任务后简短描述。'; return; }
+  if (selection && awaitingTarget.value) {
+    const question = [...transcript.value].reverse().find(item => item.role === 'assistant' && !item.jobId);
+    if (question) question.selectedLabel = selection.label;
+  }
+  addMessage('user', input);
+  message.value = '';
+  conversationText.value = fullMessage;
+  awaitingTarget.value = false;
   busy.value = true; error.value = ''; note.value = ''; plan.value = null;
   try {
     if (!draftId.value) draftId.value = crypto.randomUUID();
     localStorage.setItem(draftKey.value, draftId.value);
     const result = await apiRequest<{plan?: Plan; clarification?: string}>('/api/v1/ai/chat/plan', {
-      method:'POST', headers:postHeaders, body:JSON.stringify({message:message.value, model_id:modelId.value,
-        timezone:timezone.value, draft_id:draftId.value, ...(browse.value ? {execution:validateExecution(contract.value)} : {})})
+      method:'POST', headers:postHeaders, body:JSON.stringify({message:fullMessage, model_id:modelId.value,
+        timezone:timezone.value, draft_id:draftId.value, ...(selection ? {selected_target:{kind:selection.kind, name:selection.name}} : {}), ...(browse.value ? {execution:validateExecution(contract.value)} : {})})
     });
-    if (result.data?.clarification) note.value = reasonText[result.data.clarification] || result.data.clarification;
+    if (result.data?.clarification) {
+      note.value = reasonText[result.data.clarification] || result.data.clarification;
+      addMessage('assistant', note.value);
+      awaitingTarget.value = /设备|手机|分组|哪台|哪一组|target_|group_empty/i.test(result.data.clarification);
+      if (awaitingTarget.value) await loadTargets();
+    }
     else if (result.data?.plan) {
       plan.value = result.data.plan;
-      if (canAutoArrange(message.value, result.data.plan)) {
+      addMessage('assistant', '我整理好了这次任务，请核对设备和执行时间。');
+      if (!selection && fullMessage === input && canAutoArrange(fullMessage, result.data.plan)) {
         busy.value = false;
         await submit();
         return;
       }
     }
     else error.value = '没有取得完整计划，请补充手机和时间。';
-  } catch (e) { error.value = formatApiError(e, '无法理解任务，请检查服务器模型'); }
+  } catch (e) { error.value = formatApiError(e, '无法理解任务，请检查服务器模型'); addMessage('assistant', error.value); }
   finally { busy.value = false; }
 }
 
@@ -140,6 +178,8 @@ async function submit() {
     pending.value = null; localStorage.removeItem(pendingKey.value); plan.value = null;
     draftId.value = ''; localStorage.removeItem(draftKey.value);
     note.value = `任务 ${response.data?.id ?? ''} 已安排，可在右侧查看状态。`;
+    if (response.data?.id) addMessage('assistant', '任务已安排。执行状态会在下面的卡片中更新。', response.data.id);
+    conversationText.value = ''; selectedTarget.value = null; awaitingTarget.value = false;
     await refresh();
   } catch (e) {
     error.value = formatApiError(e, '任务是否已创建尚待核对');
@@ -149,6 +189,20 @@ async function submit() {
       note.value = '任务尚未创建，请重新理解并安排。';
     } else note.value = '请点“继续核对”查询同一次提交，避免重复创建。';
   } finally { busy.value = false; }
+}
+
+async function loadTargets() {
+  try {
+    const result = await apiRequest<{devices:Target[]; groups:TargetGroup[]}>('/api/v1/ai/targets', {cache:'no-store'});
+    targets.value = result.data?.devices || []; groups.value = result.data?.groups || [];
+  } catch { targets.value = []; groups.value = []; error.value = '暂时无法读取设备列表，请直接在聊天中输入设备名称或编号。'; }
+}
+
+function chooseTarget() {
+  if (!selectedTarget.value) return;
+  const chosen = selectedTarget.value;
+  selectedTarget.value = null;
+  void prepare(chosen);
 }
 
 async function cancel(job: Job, stopCurrent: boolean) {
@@ -169,6 +223,8 @@ onMounted(async () => {
     if (!result.data?.user_id) throw new Error('无法确认当前用户');
     pendingKey.value = `bk-fleet-pending-v1:${result.data.user_id}`;
     draftKey.value = `bk-fleet-draft-v1:${result.data.user_id}`;
+    transcriptKey.value = `bk-fleet-chat-v1:${result.data.user_id}`;
+    try { const savedChat = JSON.parse(localStorage.getItem(transcriptKey.value) || '[]'); if (Array.isArray(savedChat)) transcript.value = savedChat.slice(-100); } catch { /* Ignore invalid local history. */ }
     const saved = localStorage.getItem(pendingKey.value);
     if (saved) pending.value = JSON.parse(saved) as Pending;
     models.value = result.data?.models || [];
@@ -178,7 +234,7 @@ onMounted(async () => {
       try {
         const draft = (await apiRequest<Draft>(`/api/v1/ai/chat/drafts/${draftId.value}`, {cache:'no-store'})).data;
         if (draft && draft.state !== 'submitted') {
-          message.value = draft.message; modelId.value = draft.model_id; timezone.value = draft.timezone;
+          conversationText.value = draft.message; modelId.value = draft.model_id; timezone.value = draft.timezone;
           note.value = draft.question ? (reasonText[draft.question] || draft.question) : '已恢复上次尚未安排的任务。';
           if (draft.execution) {
             browse.value = true; duration.value = draft.execution.duration_s; maxTokens.value = draft.execution.budget.max_tokens;
@@ -187,6 +243,8 @@ onMounted(async () => {
             maxStall.value = draft.execution.progress_requirements.max_stall_s;
           }
           plan.value = draft.plan || null;
+          awaitingTarget.value = !!draft.question && /设备|手机|分组|哪台|哪一组|target_|group_empty/i.test(draft.question);
+          if (awaitingTarget.value) await loadTargets();
         } else if (!pending.value) { draftId.value = ''; localStorage.removeItem(draftKey.value); }
       } catch { draftId.value = ''; localStorage.removeItem(draftKey.value); }
     }
@@ -198,66 +256,67 @@ onBeforeUnmount(() => { mounted = false; if (refreshTimer) clearInterval(refresh
 </script>
 
 <template>
-  <div class="flex min-h-screen bg-[#f5f5f7] text-gray-900">
+  <div class="flex min-h-screen bg-[#f7f9f8] text-[#1d3028]">
     <Sidebar />
-    <main class="min-w-0 flex-1 lg:ml-[220px]">
-      <header class="border-b border-gray-100 bg-white px-5 py-4">
-        <h1 class="text-base font-semibold">智能任务</h1>
-        <p class="mt-1 text-sm text-gray-500">用一句话安排手机任务，查看每台手机的执行情况。</p>
+    <main class="flex min-h-screen min-w-0 flex-1 flex-col lg:ml-[220px]">
+      <header class="flex flex-wrap items-center justify-between gap-3 border-b border-[#e4ece7] bg-white px-6 py-4">
+        <div><h1 class="text-lg font-semibold">智能任务</h1><p class="mt-1 text-xs text-[#72847a]">像聊天一样安排手机工作</p></div>
+        <button class="flex items-center gap-1.5 rounded-lg border border-[#dce8e0] px-3 py-2 text-xs text-[#486255]" @click="showSettings = !showSettings"><Settings2 class="h-4 w-4" />任务设置</button>
       </header>
-      <div class="mx-auto grid max-w-7xl gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]">
-        <section class="rounded-xl border border-gray-200 bg-white p-5" aria-label="安排任务">
-          <h2 class="text-base font-semibold">告诉手机做什么</h2>
-          <p class="mt-2 text-sm text-gray-600">例如：让一组手机每天晚上八点检查设备状态。明确的立即任务会直接安排，其他情况会先显示识别结果。</p>
-          <label class="mt-5 block text-sm font-medium" for="model">服务器理解任务所用模型</label>
-          <select id="model" v-model="modelId" :disabled="!!pending || busy" class="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">
-            <option value="" disabled>选择服务器模型</option>
-            <option v-for="model in supportedModels" :key="model.id" :value="model.id">{{ model.name }}</option>
-          </select>
-          <p v-if="!supportedModels.length" class="mt-2 text-sm text-amber-700">请先在模型管理中配置兼容的服务器模型。</p>
-          <label class="mt-4 block text-sm font-medium" for="timezone">任务时间使用的时区</label>
-          <input id="timezone" v-model="timezone" :disabled="!!pending || busy" class="mt-2 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
-          <label class="mt-4 block text-sm font-medium" for="message">任务内容</label>
-          <textarea id="message" v-model="message" :disabled="!!pending || busy" rows="5" maxlength="4000" class="mt-2 w-full resize-y rounded-lg border border-gray-300 px-3 py-2 text-sm" placeholder="写明手机或分组、要做的事和时间" />
-          <label class="mt-3 flex items-center gap-2 text-sm"><input v-model="browse" type="checkbox" :disabled="!!pending || busy" />按约定时长持续浏览</label>
-          <div v-if="browse" class="mt-3 grid gap-3 rounded-lg border border-gray-200 p-3 sm:grid-cols-2">
-            <p class="text-sm text-gray-600 sm:col-span-2">时长和预算在此填写；任务内容中请描述浏览目标与限制。</p>
-            <label class="text-sm">时长（秒）<input v-model.number="duration" type="number" min="1" max="10000" class="mt-1 w-full rounded border border-gray-300 px-2 py-1" /></label>
-            <label class="text-sm">模型词元上限<input v-model.number="maxTokens" type="number" min="1" max="10000000" class="mt-1 w-full rounded border border-gray-300 px-2 py-1" /></label>
-            <label class="text-sm">最低有效观察次数<input v-model.number="minObservations" type="number" min="2" class="mt-1 w-full rounded border border-gray-300 px-2 py-1" /></label>
-            <label class="text-sm">最低有效时间（秒）<input v-model.number="minActive" type="number" min="1" class="mt-1 w-full rounded border border-gray-300 px-2 py-1" /></label>
-            <label class="text-sm">允许停滞上限（秒）<input v-model.number="maxStall" type="number" min="1" max="10800" class="mt-1 w-full rounded border border-gray-300 px-2 py-1" /></label>
-            <p v-if="contractError" class="text-sm text-amber-700 sm:col-span-2">{{ contractError }}</p>
+      <div v-if="showSettings" class="grid gap-3 border-b border-[#e4ece7] bg-white px-6 py-4 text-sm sm:grid-cols-2">
+        <label>理解任务的模型<select v-model="modelId" :disabled="!!pending || busy" class="mt-1 w-full rounded-lg border border-[#dbe5de] bg-white p-2"><option value="" disabled>选择服务器模型</option><option v-for="model in supportedModels" :key="model.id" :value="model.id">{{ model.name }}</option></select></label>
+        <label>任务时间的时区<input v-model="timezone" :disabled="!!pending || busy" class="mt-1 w-full rounded-lg border border-[#dbe5de] p-2" /></label>
+        <label class="flex items-center gap-2 sm:col-span-2"><input v-model="browse" type="checkbox" :disabled="!!pending || busy" />按约定时长持续浏览</label>
+        <template v-if="browse">
+          <label>时长（秒）<input v-model.number="duration" type="number" min="1" max="10000" class="mt-1 w-full rounded border p-2" /></label>
+          <label>模型词元上限<input v-model.number="maxTokens" type="number" min="1" max="10000000" class="mt-1 w-full rounded border p-2" /></label>
+          <label>最低有效观察次数<input v-model.number="minObservations" type="number" min="2" class="mt-1 w-full rounded border p-2" /></label>
+          <label>最低有效时间（秒）<input v-model.number="minActive" type="number" min="1" class="mt-1 w-full rounded border p-2" /></label>
+          <label>允许停滞上限（秒）<input v-model.number="maxStall" type="number" min="1" max="10800" class="mt-1 w-full rounded border p-2" /></label>
+          <p v-if="contractError" class="text-amber-700 sm:col-span-2">{{ contractError }}</p>
+        </template>
+      </div>
+      <div class="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <section class="flex min-h-[calc(100dvh-120px)] min-w-0 flex-col bg-white" aria-label="任务对话">
+          <div ref="conversationPane" class="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-8 lg:max-h-[calc(100dvh-220px)]" aria-live="polite">
+            <div v-if="!transcript.length" class="mx-auto mt-12 max-w-lg text-center">
+              <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#e8f6ed] text-[#008b47]"><MessageSquare class="h-6 w-6" /></div>
+              <h2 class="mt-4 text-lg font-semibold">告诉我需要手机做什么</h2>
+              <p class="mt-2 text-sm leading-6 text-[#788a80]">直接输入任务，我会在信息不完整时向你确认。</p>
+            </div>
+            <div v-for="entry in transcript" :key="entry.id" :class="entry.role === 'user' ? 'flex justify-end' : 'flex justify-start gap-2'">
+              <div v-if="entry.role === 'assistant'" class="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e5f5ea] text-[#008b47]"><Bot class="h-4 w-4" /></div>
+              <div class="max-w-[min(100%,680px)] space-y-2">
+                <p :class="entry.role === 'user' ? 'rounded-2xl rounded-tr-sm bg-[#ddf5e5] px-4 py-3 text-sm leading-6' : 'rounded-2xl rounded-tl-sm bg-[#f1f5f2] px-4 py-3 text-sm leading-6'" class="whitespace-pre-wrap break-words">{{ entry.text }}</p>
+                <div v-if="entry.selectedLabel" class="rounded-xl border border-[#dce8df] bg-white p-3 text-sm"><span class="font-medium">选择设备或分组</span><p class="mt-2 text-xs text-[#008b47]">已选择：{{ entry.selectedLabel }}</p></div>
+                <template v-if="entry.jobId">
+                  <div v-if="jobs.find(job => job.id === entry.jobId)" class="rounded-xl border border-[#dce8df] bg-white p-4 text-sm">
+                    <template v-for="job in jobs.filter(item => item.id === entry.jobId)" :key="job.id">
+                      <div class="flex items-center justify-between gap-2"><strong>{{ job.goal }}</strong><span class="rounded-full bg-[#e8f7ec] px-2 py-1 text-xs text-[#008b47]">{{ stateText[job.state] || job.state }}</span></div>
+                      <p class="mt-2 text-xs text-[#71857a]">{{ scheduleText(job.schedule) }} · 任务 #{{ job.id }}</p>
+                      <p v-for="device in job.devices" :key="device.domain || 'revoked'" class="mt-2 text-xs">{{ device.domain || '已撤销访问' }}：{{ device.active_task ? (device.active_task.cancel_requested ? '停止待确认' : (activeStateText[device.active_task.status] || '状态待核对')) : device.last_task ? (reasonText[device.last_task.reason || ''] || stateText[device.last_task.state] || device.last_task.state) : '等待执行' }}<span v-if="device.last_task?.answer"> · {{ device.last_task.answer }}</span><a v-if="device.active_task && device.domain" class="ml-2 text-[#008b47] underline" :href="toHashHref('/ai/' + device.domain + '?task=' + device.active_task.task_id)">查看并处理</a></p>
+                      <div class="mt-3 flex gap-4 text-xs"><button class="text-[#008b47]" @click="toggleRuns(job)">{{ expanded === job.id ? '收起执行记录' : '查看执行记录' }}</button><button v-if="['bk_running','bk_paused'].includes(job.state)" :disabled="busy" class="text-[#697d70]" @click="cancel(job, false)">停止后续</button><button v-if="hasActive(job)" :disabled="busy" class="text-red-700" @click="cancel(job, true)">停止当前任务</button></div>
+                      <ul v-if="expanded === job.id" class="mt-3 space-y-1 border-t pt-2 text-xs text-[#71857a]"><li v-for="run in runs" :key="run.task_id">{{ showTime(run.scheduled_at) }} · {{ run.device }} · {{ reasonText[run.reason || ''] || stateText[run.state] || run.state }}<span v-if="run.answer">：{{ run.answer }}</span></li></ul>
+                    </template>
+                  </div><p v-else class="text-xs text-[#72847a]">任务 #{{ entry.jobId }} 的状态暂未取得，请在右侧任务记录查看。</p>
+                </template>
+              </div>
+            </div>
+            <div v-if="showTargetChoices" class="ml-10 max-w-[680px] rounded-xl border border-[#d8e6dc] bg-white p-4">
+              <div class="flex items-center gap-2 font-semibold"><Smartphone class="h-4 w-4 text-[#008b47]" />选择设备或分组</div>
+              <div class="mt-3 flex gap-5 border-b border-[#e5ece7] text-sm"><button :class="targetTab === 'device' ? 'border-b-2 border-[#00964c] pb-2 font-medium text-[#008b47]' : 'pb-2 text-[#72847a]'" @click="targetTab = 'device'; selectedTarget = null">设备</button><button :class="targetTab === 'group' ? 'border-b-2 border-[#00964c] pb-2 font-medium text-[#008b47]' : 'pb-2 text-[#72847a]'" @click="targetTab = 'group'; selectedTarget = null">分组</button></div>
+              <div v-if="targetTab === 'device'" class="mt-2 max-h-48 space-y-1 overflow-y-auto"><p v-if="!targets.length" class="py-3 text-xs text-[#72847a]">暂无可选设备，也可以直接输入设备名称。</p><button v-for="device in targets" :key="device.domain" class="flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm" :class="selectedTarget?.name === device.domain ? 'bg-[#e7f7eb]' : 'hover:bg-[#f4f8f5]'" @click="selectedTarget = {kind:'device',name:device.domain,label:device.name + '（' + device.domain + '）'}"><Smartphone class="h-4 w-4 text-[#5d7668]" /><span class="flex-1 truncate">{{ device.name }} <span class="text-xs text-[#8a9b90]">{{ device.domain }}</span></span><span class="text-xs" :class="device.state === 'online' ? 'text-[#008b47]' : 'text-[#a77446]'">{{ device.state === 'online' ? '在线' : '离线' }}</span></button></div>
+              <div v-else class="mt-2 max-h-48 space-y-1 overflow-y-auto"><p v-if="!groups.length" class="py-3 text-xs text-[#72847a]">暂无可选分组。</p><button v-for="group in groups" :key="group.id" :disabled="!group.count" class="flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm disabled:opacity-40" :class="selectedTarget?.name === group.name ? 'bg-[#e7f7eb]' : 'hover:bg-[#f4f8f5]'" @click="selectedTarget = {kind:'group',name:group.name,label:group.name}"><Users class="h-4 w-4 text-[#5d7668]" /><span class="flex-1">{{ group.name }}</span><span class="text-xs text-[#72847a]">{{ group.count }} 台</span></button></div>
+              <div class="mt-3 flex justify-end"><button :disabled="!selectedTarget || busy" class="rounded-lg bg-[#00964c] px-4 py-2 text-xs font-medium text-white disabled:opacity-40" @click="chooseTarget">确认选择</button></div>
+            </div>
+            <div v-if="plan || pending" class="ml-10 max-w-[680px] rounded-xl border border-[#d8e6dc] bg-white p-4 text-sm">
+              <div class="flex items-center gap-2 font-semibold"><ClipboardList class="h-4 w-4 text-[#008b47]" />核对任务安排</div><p class="mt-3 whitespace-pre-wrap">{{ (pending?.plan || plan)?.goal }}</p><p class="mt-2 text-xs text-[#71857a]">设备：{{ (pending?.plan || plan)?.devices.join('、') }}</p><p class="mt-1 text-xs text-[#71857a]">时间：{{ scheduleText((pending?.plan || plan)!.schedule) }}</p><p v-if="(pending?.plan || plan)?.execution" class="mt-1 text-xs text-[#71857a]">时长：{{ (pending?.plan || plan)?.execution?.duration_s }} 秒；预算：{{ (pending?.plan || plan)?.execution?.budget.max_tokens }} 词元</p><p class="mt-2 text-xs text-[#8a9b90]">设备按当前选择固定；离线或错过时不自动补跑。</p><button class="mt-3 rounded-lg bg-[#00964c] px-4 py-2 text-xs font-medium text-white disabled:opacity-40" :disabled="busy" @click="submit">{{ pending ? '继续核对原任务' : '确认安排' }}</button>
+            </div>
+            <p v-if="busy" class="ml-10 text-xs text-[#72847a]">正在处理，请稍候…</p><p v-if="error" role="alert" class="ml-10 text-xs text-amber-700">{{ error }}</p>
           </div>
-          <button class="mt-3 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" :disabled="busy || !!pending || !modelId || !message.trim() || !!contractError" @click="prepare">发送任务</button>
-          <div v-if="plan || pending" class="mt-5 border-t border-gray-200 pt-4">
-            <h3 class="font-semibold">识别出的安排</h3>
-            <p class="mt-2 text-sm">{{ (pending?.plan || plan)?.goal }}</p>
-            <p class="mt-2 text-sm text-gray-600">手机：{{ (pending?.plan || plan)?.devices.join('、') }}</p>
-            <p class="mt-1 text-sm text-gray-600">时间：{{ scheduleText((pending?.plan || plan)!.schedule) }}</p>
-            <p v-if="(pending?.plan || plan)?.execution" class="mt-1 text-sm text-gray-600">每台浏览时长：{{ (pending?.plan || plan)?.execution?.duration_s }} 秒；预算上限：{{ (pending?.plan || plan)?.execution?.budget.max_tokens }} 词元。</p>
-            <p class="mt-1 text-sm text-gray-500">固定使用以上手机；到点离线或错过时不自动补跑。</p>
-            <button class="mt-4 rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" :disabled="busy" @click="submit">{{ pending ? '继续核对' : '安排任务' }}</button>
-          </div>
-          <p v-if="note" role="status" class="mt-4 text-sm text-blue-800">{{ note }}</p>
-          <p v-if="error" role="alert" class="mt-4 text-sm text-red-700">{{ error }}</p>
+          <form class="border-t border-[#e4ece7] bg-white p-4 sm:px-8" @submit.prevent="prepare()"><div class="flex items-end gap-2 rounded-xl border border-[#d6e3da] bg-white p-2 shadow-sm"><textarea v-model="message" :disabled="!!pending || busy" rows="2" maxlength="4000" class="min-h-[46px] min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none" placeholder="输入消息，例如：明天上午 9 点让一组手机检查状态…" @keydown.enter.exact.prevent="prepare()" /><button type="submit" :disabled="busy || !!pending || !modelId || !message.trim() || !!contractError" class="flex items-center gap-1.5 rounded-lg bg-[#00964c] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-40"><Send class="h-4 w-4" />发送</button></div><p v-if="!supportedModels.length" class="mt-2 text-xs text-amber-700">请先在模型管理中配置服务器模型。</p><p v-else-if="!modelId" class="mt-2 text-xs text-amber-700">请先在“任务设置”里选择理解任务的模型。</p><p v-else-if="contractError" class="mt-2 text-xs text-amber-700">请在“任务设置”里补全浏览时长和预算。</p><p v-else class="mt-2 text-xs text-[#a0aea5]">对话保存在当前浏览器；任务记录保存在服务器。</p></form>
         </section>
-        <section class="rounded-xl border border-gray-200 bg-white p-5" aria-label="任务记录">
-          <div class="flex items-center justify-between"><h2 class="text-base font-semibold">任务记录</h2><button class="text-sm text-blue-700" @click="refresh">刷新</button></div>
-          <p v-if="targetJobError" role="alert" class="mt-3 text-sm text-amber-700">{{ targetJobError }}</p>
-          <p v-if="!jobs.length" class="mt-5 text-sm text-gray-500">安排任务后，这里会显示各台手机的结果。</p>
-          <article v-for="job in jobs" :key="job.id" class="mt-4 border-t border-gray-200 pt-4">
-            <p v-if="String(job.id) === targetJob" class="mb-1 text-sm font-medium text-blue-700">从任务列表打开的任务 #{{ job.id }}</p>
-            <div class="flex flex-wrap items-start justify-between gap-2"><p class="font-medium">{{ job.goal }}</p><span class="text-sm text-gray-600">{{ stateText[job.state] || job.state }}</span></div>
-            <p class="mt-1 text-sm text-gray-500">{{ scheduleText(job.schedule) }}；下次：{{ showTime(job.next_at) }}</p>
-            <p v-if="job.schedule_error" class="mt-1 text-sm text-amber-700">{{ reasonText[job.schedule_error] || job.schedule_error }}</p>
-            <ul class="mt-3 space-y-2 text-sm"><li v-for="(device, index) in job.devices" :key="index"><span class="font-medium">{{ device.domain || '已撤销访问' }}</span>：{{ device.last_task ? (reasonText[device.last_task.reason || ''] || stateText[device.last_task.state] || device.last_task.state) : (stateText[device.state] || device.state) }}<span v-if="device.last_task?.answer">；结果：{{ device.last_task.answer }}</span>
-              <div v-if="device.active_task && device.domain" class="mt-1 text-amber-800">当前任务：{{ device.active_task.cancel_requested ? '停止待确认' : (activeStateText[device.active_task.status] || '状态待核对') }}<span v-if="device.active_task.phone_received_at">（手机上次反馈：{{ showTime(device.active_task.phone_received_at) }}）</span><span v-else>（尚无手机反馈）</span> · <a class="text-blue-700 underline" :href="toHashHref('/ai/' + device.domain + '?task=' + device.active_task.task_id)">查看并处理原任务</a></div>
-            </li></ul>
-            <div class="mt-3 flex flex-wrap gap-3 text-sm"><button class="text-blue-700" @click="toggleRuns(job)">{{ expanded === job.id ? '收起执行记录' : '查看执行记录' }}</button><button v-if="['bk_running', 'bk_paused'].includes(job.state)" class="text-blue-700" :disabled="busy" @click="cancel(job, false)">停止后续安排</button><button v-if="hasActive(job)" class="text-red-700" :disabled="busy" @click="cancel(job, true)">同时停止当前任务</button></div>
-            <div v-if="expanded === job.id" class="mt-3 border-t border-gray-100 pt-3 text-sm"><p v-if="!runs.length" class="text-gray-500">暂无执行记录。</p><ul class="space-y-2"><li v-for="run in runs" :key="run.task_id">{{ showTime(run.scheduled_at) }} · {{ run.device }} · {{ reasonText[run.reason || ''] || stateText[run.state] || run.state }}<span v-if="run.answer">：{{ run.answer }}</span></li></ul><p v-if="runs.length === 100" class="mt-2 text-gray-500">显示最近 100 次。</p></div>
-          </article>
-        </section>
+        <aside class="border-t border-[#e4ece7] bg-[#fbfdfb] px-5 py-5 lg:border-l lg:border-t-0" aria-label="任务记录"><div class="flex items-center justify-between"><h2 class="flex items-center gap-2 font-semibold"><ClipboardList class="h-4 w-4" />任务记录</h2><button class="text-[#008b47]" aria-label="刷新任务记录" @click="refresh"><RefreshCw class="h-4 w-4" /></button></div><p v-if="targetJobError" class="mt-4 text-xs text-amber-700">{{ targetJobError }}</p><p v-if="!jobs.length" class="mt-5 text-sm text-[#91a098]">安排任务后，记录会显示在这里。</p><button v-for="job in jobs" :key="job.id" class="mt-3 w-full rounded-lg border border-[#e4eee7] bg-white p-3 text-left hover:border-[#a9d6b8]" @click="addMessage('assistant', '这是任务的当前状态。', job.id)"><div class="flex items-start justify-between gap-2"><span class="truncate text-sm font-medium">{{ job.goal }}</span><span class="shrink-0 text-xs text-[#008b47]">{{ stateText[job.state] || job.state }}</span></div><p class="mt-2 text-xs text-[#8a9b90]">{{ scheduleText(job.schedule) }} · #{{ job.id }}</p><p v-if="String(job.id) === targetJob" class="mt-1 text-xs text-[#008b47]">从任务列表打开的任务 #{{ job.id }}</p></button></aside>
       </div>
     </main>
   </div>
