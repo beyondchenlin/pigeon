@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import QRCode from "ant-design-vue/es/qrcode";
 import { ArrowRightLeft, Link2, RotateCw, Wifi } from "lucide-vue-next";
 import {
   Dialog,
@@ -82,6 +83,12 @@ const mode = ref<ConnectionMode>("direct");
 const addressMode = ref<AddressMode>("fixed");
 const loading = ref(false);
 const tip = ref<{ id: number; text: string; variant: "success" | "error" | "info" } | null>(null);
+const downloadQr = ref<{name: string; url: string} | null>(null);
+const appDownloads = computed(() => [
+  {name:'Shizuku', description:t.value.devices.appShizukuDesc, url:'https://shizuku.rikka.app/download/'},
+  {name:'FIRERPA', description:t.value.devices.appFirerpaDesc, url:'https://device-farm.com/docs/en/quick-start'},
+  {name:'Termux', description:t.value.devices.appTermuxDesc, url:'https://github.com/termux/termux-app#installation'},
+]);
 
 // 直连 - 固定地址
 const directFixedIp = ref("");
@@ -142,6 +149,7 @@ const clearForm = () => {
   scanSelectedIps.value = new Set();
   scanBatchLoading.value = false;
   scanTip.value = null;
+  downloadQr.value = null;
 };
 
 watch(
@@ -348,12 +356,29 @@ const onScanResultOpenChange = (next: boolean) => {
 
 <template>
   <Dialog :open="open" @update:open="emit('update:open', $event)">
-    <DialogContent class="sm:max-w-2xl">
+    <DialogContent class="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>{{ t.devices.addDialogTitle }}</DialogTitle>
       </DialogHeader>
 
       <div class="space-y-6 py-4">
+        <details class="rounded-lg border border-blue-200 bg-blue-50/50 p-3">
+          <summary class="cursor-pointer text-sm font-semibold text-blue-900">{{ t.devices.appDownloadsTitle }}</summary>
+          <p class="mt-2 text-xs leading-5 text-muted-foreground">{{ t.devices.appDownloadsHint }}</p>
+          <div class="mt-3 space-y-2">
+            <div v-for="app in appDownloads" :key="app.name" class="flex flex-wrap items-center gap-2 rounded border bg-background p-2 text-xs">
+              <span class="min-w-0 flex-1"><strong>{{ app.name }}</strong> · {{ app.description }}</span>
+              <a :href="app.url" target="_blank" rel="noopener noreferrer" class="text-blue-700 underline">{{ t.devices.appDownloadLink }}</a>
+              <button type="button" class="rounded border px-2 py-1 text-blue-700" @click="downloadQr = app">{{ t.devices.appDownloadQr }}</button>
+            </div>
+            <div class="rounded border bg-background p-2 text-xs"><strong>BK CLAW</strong> · {{ t.devices.appBkPending }}</div>
+          </div>
+          <div v-if="downloadQr" class="mt-3 flex flex-col items-center gap-2 rounded border bg-background p-3" role="status">
+            <p class="text-xs font-medium">{{ downloadQr.name }} · {{ t.devices.appScanHint }}</p>
+            <div class="rounded bg-white p-2"><QRCode :value="downloadQr.url" :size="180" :bordered="false" color="#111111" bg-color="#ffffff" type="canvas" /></div>
+            <button type="button" class="text-xs text-blue-700 underline" @click="downloadQr = null">{{ t.devices.appCloseQr }}</button>
+          </div>
+        </details>
         <!-- Connection Mode Selection - Card Style -->
         <div class="grid grid-cols-3 gap-3">
           <!-- Direct Connection Card -->

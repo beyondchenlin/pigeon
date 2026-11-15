@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { resolve, join, extname, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 
-const dist = resolve('dist');
+const dist = resolve(process.argv[2] || 'dist');
 const chrome = process.env.CHROME_BIN || [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -83,6 +83,17 @@ try {
   await click('关闭');
   await waitFor("!document.querySelector('[role=dialog] canvas')");
   await click('添加设备');
+  await waitFor("document.body.innerText.includes('安装手机应用（扫码下载）')");
+  await evalPage("[...document.querySelectorAll('summary')].find(x=>x.textContent.includes('安装手机应用')).click()");
+  await waitFor("document.body.innerText.includes('正式版下载地址准备中')");
+  const links=await evalPage("[...document.querySelectorAll('[role=dialog] a')].filter(x=>x.textContent.includes('官方下载页')).map(x=>x.href)");
+  assert.deepEqual(links,['https://shizuku.rikka.app/download/','https://device-farm.com/docs/en/quick-start','https://github.com/termux/termux-app#installation']);
+  assert.ok(await evalPage("document.body.innerText.includes('可选，供远程排障使用')"));
+  await evalPage("[...document.querySelectorAll('[role=dialog] button')].find(x=>x.textContent.trim()==='扫码下载').click()");
+  await waitFor("document.querySelector('[role=dialog] canvas') && document.body.innerText.includes('手机扫码打开官方下载页')");
+  assert.equal(creates,0,'download QR must not add a device');
+  await click('收起二维码');
+  await evalPage("[...document.querySelectorAll('summary')].find(x=>x.textContent.includes('安装手机应用')).click()");
   await click('转发（扫码接入）');
   await click('确认添加');
   await waitFor("document.querySelector('[role=dialog] canvas') && document.body.innerText.includes('/properties/newphone')");
