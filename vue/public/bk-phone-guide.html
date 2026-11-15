@@ -51,7 +51,7 @@
 <label class="done"><input type="checkbox" data-check="service"><span>FIRERPA 服务能运行，或管理员已确认控制台实际可用。</span></label></section>
 
 <section class="section" id="register"><div class="heading"><span class="num">4</span><div><h2>在后台为这台手机建立独立记录</h2><div class="who">谁来做：后台管理员 · 电脑或另一台手机均可</div></div></div>
-<p><a class="button primary" href="https://dongfengqi.top/#/devices" target="_blank" rel="noopener noreferrer">打开 BK 群控设备管理</a></p>
+<p><a class="button primary" href="/#/devices" target="_blank" rel="noopener noreferrer">打开 BK 群控设备管理</a></p>
 <ol><li>使用已有管理员账号登录。账号通常是 <code>admin</code>，密码使用你后来修改的那一个；本指南不保存密码。</li><li>进入“设备”，点击右上角<strong>添加设备</strong>。</li><li>在“接入设备”窗口选<strong>转发</strong>，填写备注，例如 <code>BK-02｜vivo｜家里</code>，点击<strong>确认添加</strong>。</li><li>在弹出的“配置信息”中点<strong>复制</strong>。配置以 <code>[pigeon]</code> 开头，包含 <code>properties.remote</code>、<code>properties.ckey</code>、<code>properties.tries</code>。</li><li>记下“手机编号 ↔ 后台设备 ID”的对应关系，将<strong>这一整段配置</strong>私下交给这台手机的操作者。关闭弹窗后，可从“未接入”卡片的“接入配置”重新查看。</li></ol>
 <div class="notice"><strong>选“转发”，画面仍可以使用 WebRTC。</strong>这里选择的是手机接入后台的方式，不是视频协议。当前服务器没有配置后台菜单里的 P2P 接入桥，不要因为想要流畅画面就选择 P2P。</div>
 <p class="sub">第 2–10 台分别点一次“添加设备”。失败重试先检查原记录，不要给同一台手机连续创建多条记录；不要把第一台的设备 ID、证书或配置复制到其他手机。</p>
@@ -62,7 +62,7 @@
 <div class="notice warn"><strong>这里不能用通用示例代替真实配置。</strong>每台必须从后台复制完整内容；本页不会生成密钥，也不会接收你的配置。</div>
 <details><summary>FIRERPA 运行中，群控仍显示离线怎么办？</summary><div><p>先确认 Shizuku 正在运行、FIRERPA 首页显示运行中，再打开 FIRERPA 的<strong>配置</strong>，查看是否存在 <code>[pigeon]</code>。如果没有，请管理员核对原设备身份；远程维护优先在后台选中该设备，点击<strong>接入配置二维码</strong>，手机扫码复制配置。不要新建重复设备或复制其他手机的配置。</p><p>保留现有内容，在末尾追加配置，点击应用；按提示重新加载，或回首页停止后再启动一次。扫码只负责复制，不会自动修改配置。等待后台更新，再检查在线状态、控制连接和实时画面。配置和二维码包含凭据，不要截图、转发或公开；管理员应及时关闭二维码。</p><p>如果已经有 <code>[pigeon]</code>、仍然离线或提示启动超时，请管理员继续检查，不要反复重启或直接卸载。BK CLAW 连接和任务是否可用要另外核对。</p></div></details>
 <details><summary>手机 App 的配置页不方便，能从网页填写吗？</summary><div><p>可以。先在可信的同一 Wi-Fi 中，打开 FIRERPA App 实际显示的本机控制台地址；在原生控制台右上角打开文本配置，切换 <strong>Raw Text</strong>，保留原文并在末尾追加本机的 <code>[pigeon]</code> 段，勾选 <strong>Reload Service</strong> 后点 <strong>Apply Config</strong>。这是另一种填写方法，不需要两种都做。</p><p>普通首次本地控制台常用 65000 端口；接入后端口 / 证书可能改变，以实际地址为准，不把旧地址保存成云端入口。保存后网页短暂断开正常；若持续报启动超时，转到“遇到问题”。</p></div></details>
-<details><summary>为什么配置是 http / IP / 18000，后台却是域名 HTTPS？</summary><div><p>它们用途不同。网页登录用 <a href="https://dongfengqi.top" target="_blank" rel="noopener noreferrer">https://dongfengqi.top</a>；当前后台生成的 <code>properties.remote</code> 是手机获取接入配置的专用地址，可能仍含 <code>http://47.242.93.105:18000/properties/…</code>。配套校验配置由后台一起生成。</p><p>先完整使用后台实际生成的内容，不自行把 18000 改成 19000，也不随意改写协议或 <code>properties.ckey</code>。后续接入地址迁移由管理员统一处理。</p></div></details>
+<details><summary>为什么设备配置地址和网页登录地址不同？</summary><div><p>它们用途不同。网页登录用 <a href="/" target="_blank" rel="noopener noreferrer">本实例管理后台</a>；当前后台生成的 <code>properties.remote</code> 是手机获取接入配置的专用地址，地址中包含本实例的主机、端口和 <code>/properties/</code>。配套校验配置由后台一起生成。</p><p>先完整使用后台实际生成的内容，保留原端口、协议和 <code>properties.ckey</code>。后续接入地址迁移由管理员统一处理。</p></div></details>
 <p class="sub">配置格式依据 <a href="https://device-farm.com/docs/en/properties" target="_blank" rel="noopener noreferrer">FIRERPA 官方配置说明</a>。首次设置尽量在可信网络完成；不要在路由器上把手机调试或控制台端口暴露到公网。</p>
 <label class="done"><input type="checkbox" data-check="attach"><span>专属配置已应用，后台能看到这台手机上线。</span></label></section>
 
@@ -73,7 +73,7 @@
 
 <section class="section" id="daily"><div class="heading"><span class="num">用</span><div><h2>每天怎样使用</h2><div class="who">手机端保持服务，电脑端打开后台</div></div></div>
 <p><strong>手机现场：</strong>保持供电和网络，允许 FIRERPA、Shizuku 后台运行；不要用“一键清理”结束它们。需要看屏幕或操作时解锁手机。屏幕关闭或密码锁定可能导致黑屏，不要关闭锁屏密码来掩盖问题。</p>
-<p><strong>后台操作者：</strong>登录 <a href="https://dongfengqi.top/#/devices" target="_blank" rel="noopener noreferrer">设备管理</a>，先核对设备编号再进入远控。视频发布、私信发送前核对账号和目标；响应慢时先等结果，避免连续点击造成重复操作。</p>
+<p><strong>后台操作者：</strong>登录 <a href="/#/devices" target="_blank" rel="noopener noreferrer">设备管理</a>，先核对设备编号再进入远控。视频发布、私信发送前核对账号和目标；响应慢时先等结果，避免连续点击造成重复操作。</p>
 <p><strong>多台手机：</strong>每台一条后台记录。日常不需要为每台重装云服务器，也不需要让十个远控详情页同时播放。当前服务器只做过单台性能验收，增加设备时同步观察内存、连接与任务稳定性。</p>
 <p class="sub">本指南解决“手机接入与远控”。后续 AI 自动浏览、发布、私信流程还需要单独配置和验收，装好这两个 App 不会自动执行这些任务。</p></section>
 
@@ -89,19 +89,16 @@
 <details><summary>后台“未接入”或离线</summary><div><p>依次核对：手机能上网 → Shizuku 运行 → FIRERPA 服务可用 → 配置属于当前手机且已应用。后台有记录只表示创建完成，不表示手机已接入。管理员再查接入端口和服务日志；别重复创建同一台设备。</p></div></details>
 <details><summary>后台在线，但画面黑屏</summary><div><p>先在手机上用原有密码 / 指纹解锁，再刷新远控页。手机锁屏密码不用发给管理员。若仍黑屏，记录当前显示 WebRTC / H.264、手机前台 App 和时间；管理员可以用同一远控地址加 <code>?transport=ws</code> 临时对照回退。</p></div></details>
 <details><summary>有画面，但是点不动</summary><div><p>核对当前设备是否选对，页面是否提示“触控通道尚未连接”。确认手机解锁、Shizuku 对 FIRERPA 已授权。个别品牌对输入调试有额外限制，由管理员按机型核对，不把所有权限一口气都打开。</p></div></details>
-<details><summary>换了电脑以后很卡，或网页打不开</summary><div><p>使用域名 HTTPS 入口；开了代理 / VPN 的电脑，需要把 <code>dongfengqi.top</code> 和 <code>*.dongfengqi.top</code> 加入它自己的直连例外，并重新打开页面。此前只配置过测试电脑，其他电脑不会自动继承。</p><p>先关掉同一设备的多余远控窗口，再记录网络、时间和传输方式。网站打不开与手机服务启动失败是两类问题，不要看到网页卡就重装手机。</p></div></details>
+<details><summary>换了电脑以后很卡，或网页打不开</summary><div><p>使用域名 HTTPS 入口；开了代理 / VPN 的电脑，需要把 当前部署域名 加入它自己的直连例外，并重新打开页面。每台电脑有自己的代理设置。</p><p>先关掉同一设备的多余远控窗口，再记录网络、时间和传输方式。网站打不开与手机服务启动失败是两类问题，不要看到网页卡就重装手机。</p></div></details>
 <details><summary>Termux 提示输入无线调试端口</summary><div><p>只适用于管理员已配置该台救援脚本的情况。到“设置 → 开发者选项 → 无线调试”，把主页面“IP 地址和端口”中冒号后的数字填入 Termux；不是配对弹窗的端口，也不是六位配对码。</p><p>显示“正在连接服务器”只是正在尝试，不代表连接已经成功。由管理员核对该手机的专属隧道；新机没配置脚本时不要照抄第一台。</p></div></details></section>
 
 <section class="section" id="admin"><div class="heading"><span class="num">管</span><div><h2>管理员如何管后台和服务器</h2><div class="who">现场家人一般不用操作这一节</div></div></div>
 <h3>新增一台时，只做后台登记与验收</h3><p>现有云服务器已部署 BK 群控。按第 4 步新增“转发”设备，发放专属配置；手机上线后设备注 / 分组，并核对设备 ID。服务端会为新记录生成相应配置和证书，不需要为每台手机再部署一套 Docker。</p>
-<div class="table-wrap"><table><thead><tr><th>用途</th><th>当前入口 / 要求</th></tr></thead><tbody><tr><td>日常后台登录</td><td><a href="https://dongfengqi.top" target="_blank" rel="noopener noreferrer">https://dongfengqi.top</a></td></tr><tr><td>备用管理入口</td><td><a href="https://dongfengqi.top:19000" target="_blank" rel="noopener noreferrer">https://dongfengqi.top:19000</a></td></tr><tr><td>设备配置获取</td><td>按后台生成的 18000 / properties 地址；迁移前保留</td></tr><tr><td>设备接入与消息</td><td>现有服务器 TCP 17000、18883；手机网络需允许访问</td></tr><tr><td>WebRTC 中转</td><td>现有服务器 TCP / UDP 3478、UDP 49160–49200；由平台发短期凭据</td></tr><tr><td>ADB / 数据库 / Redis</td><td>不要新增公网映射；手机端不必做路由器端口转发</td></tr></tbody></table></div>
+<div class="table-wrap"><table><thead><tr><th>用途</th><th>当前入口 / 要求</th></tr></thead><tbody><tr><td>日常后台登录</td><td><a href="/" target="_blank" rel="noopener noreferrer">本实例管理后台</a></td></tr><tr><td>设备配置获取</td><td>按本实例后台生成的 properties 地址</td></tr><tr><td>设备接入与消息</td><td>本实例的 FRP 与 MQTT TCP 端口；手机网络需允许访问</td></tr><tr><td>WebRTC 中转</td><td>使用本实例配置的 TURN 地址与中继端口，由平台发短期凭据</td></tr><tr><td>ADB / 数据库 / Redis</td><td>不要新增公网映射；手机端不必做路由器端口转发</td></tr></tbody></table></div>
 <p class="sub">以上是当前部署的核对表，不是要求每接入一台都重新开放端口。网络规则变更由管理员统一处理。</p>
-<details><summary>服务器异常时，管理员先做哪些检查？</summary><div><p>使用你自己的 SSH 凭据登录服务器，先执行只读检查：</p><pre>docker ps --filter name=phone-pilot-pigeon --format '{{.Names}}  {{.Status}}'
-systemctl is-active bk-turn
-free -h
-df -h /opt
-docker logs --tail 100 phone-pilot-pigeon-pigeon-1</pre><p>只查看日志中与故障时间对应的报错；转发日志给别人前移除凭据。域名能打开却只有一台离线，优先查该手机；所有设备一起离线，再查网络和服务端。没有定位原因前，不默认重启整个服务器。</p><p>开发和发布继续使用 dev，main 保持原状。数据库、证书、设备配置需要保留；不要删除数据卷来“重新接入”。</p></div></details>
-<details><summary>如果要给十台都准备远程 ADB 救援</summary><div><p>这是独立的管理员配置工作：每台建立可撤销的 SSH 身份和主机指纹校验，分配互不冲突、只监听服务器回环地址的转发端口，再安装各自的 Termux 脚本。无线 ADB 还需要独立配对 / 授权。</p><p>当前只有第一台已有救援配置，不能认为后面九台安装 Termux 就自动具备。先完成正常接入，确实需要救援通道时，再按台配置和验收。</p></div></details>
+<details><summary>服务器异常时，管理员先做哪些检查？</summary><div><p>在本实例的 Compose 配置目录执行检查：</p><pre>docker compose ps
+docker compose logs --tail 100 pigeon</pre><p>只查看日志中与故障时间对应的报错；转发日志给别人前移除凭据。域名能打开却只有一台离线，优先查该手机；所有设备一起离线，再查网络和服务端。没有定位原因前，不默认重启整个服务器。</p><p>开发和发布继续使用 dev，main 保持原状。数据库、证书、设备配置需要保留；不要删除数据卷来“重新接入”。</p></div></details>
+<details><summary>如果要给十台都准备远程 ADB 救援</summary><div><p>这是独立的管理员配置工作：每台建立可撤销的 SSH 身份和主机指纹校验，分配互不冲突、只监听服务器回环地址的转发端口，再安装各自的 Termux 脚本。无线 ADB 还需要独立配对 / 授权。</p><p>每台手机分别配置并验证救援通道。先完成正常接入，确实需要救援通道时，再按台配置和验收。</p></div></details>
 <div class="notice"><strong>第二台跑通后再复制流程。</strong>记录手机型号、Android 版本、FIRERPA 服务版本、后台 ID、网络和重启恢复结果。先验收 2–3 台，再加到 10 台；不要把能登记十条记录当成十台并发已经通过。</div></section>
 
 <section class="section" id="feedback"><div class="heading"><span class="num">记</span><div><h2>把这一台的结果记下来</h2><div class="who">可复制给管理员 · 不填写密码、配对码或接入密钥</div></div></div>

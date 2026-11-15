@@ -1,0 +1,150 @@
+x-service: &service
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: 20m, max-file: "5"}
+
+x-redis: &redis
+  <<: *service
+  image: redis:8-alpine@sha256:7958cfbb9d152f87dadfbc89f1b0b15938f0b81ff8982feb327476f4911935c3
+  environment:
+    REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+  healthcheck:
+    test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -qx PONG"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+  command: ["sh", "/config/start.sh"]
+
+services:
+  pigeon:
+    <<: *service
+    platform: linux/amd64
+    image: ${BK_IMAGE:-ghcr.io/beyondchenlin/bk-pigeon:0.5.0-standalone}
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+      redis-master: {condition: service_healthy}
+      redis-slave01: {condition: service_healthy}
+      redis-slave02: {condition: service_healthy}
+      redis-lock01: {condition: service_healthy}
+      redis-lock02: {condition: service_healthy}
+      redis-lock03: {condition: service_healthy}
+    environment:
+      DOMAIN: ${DOMAIN:?}
+      PUBLIC_IP: ${PUBLIC_IP:?}
+      LOCAL_LAN_IP: ${LOCAL_LAN_IP:?}
+      WEB_PORT: ${WEB_PORT:-8000}
+      FWD_PORT: ${FWD_PORT:-7000}
+      MQP_PORT: ${MQP_PORT:-8883}
+      API_PORT: "65000"
+      BK_AI_ORIGIN: ${PUBLIC_ORIGIN:?}
+      BK_MAINTENANCE_ORIGIN: ${PUBLIC_ORIGIN:?}
+      BK_CLAW_RELEASE_PACKAGE_ENABLED: ${BK_CLAW_RELEASE_PACKAGE_ENABLED:-0}
+      BK_TURN_HOST: ${BK_TURN_HOST:-}
+      BK_TURN_SECRET: ${BK_TURN_SECRET:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+      PIGEON_INITIAL_PASSWORD: ${PIGEON_INITIAL_PASSWORD:?}
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${WEB_PORT:-8000}:${WEB_PORT:-8000}"
+      - "${BIND_IP:-0.0.0.0}:${MQP_PORT:-8883}:${MQP_PORT:-8883}"
+      - "${BIND_IP:-0.0.0.0}:${FWD_PORT:-7000}:${FWD_PORT:-7000}"
+      - "${BIND_IP:-0.0.0.0}:${FWD_PORT:-7000}:${FWD_PORT:-7000}/udp"
+    volumes: ["user:/user"]
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    healthcheck:
+      test: ["CMD-SHELL", "supervisorctl status >/dev/null && curl --noproxy '*' -kfsS https://127.0.0.1:$$WEB_PORT/ -o /dev/null"]
+      interval: 15s
+      timeout: 6s
+      start_period: 45s
+      retries: 4
+
+  postgres:
+    <<: *service
+    image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+    environment:
+      POSTGRES_DB: pigeon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+    volumes: ["postgres:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "pigeon"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    <<: *service
+    image: rabbitmq:3@sha256:87178a0ee3e2f52980ba356d38646ed1056705ff2d5ff281f8965456eaa0c1e3
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbit
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?}
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
+    volumes: ["rabbit:/var/lib/rabbitmq"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 8s
+      retries: 20
+
+  redis-master:
+    <<: *redis
+    volumes: ["../pilot/redis/server-master.sh:/config/start.sh:ro", "redis:/data"]
+  redis-slave01: &replica
+    <<: *redis
+    depends_on: {redis-master: {condition: service_healthy}}
+    volumes: ["../pilot/redis/server-slave.sh:/config/start.sh:ro"]
+    tmpfs: ["/data"]
+  redis-slave02: *replica
+  redis-lock01: &lock
+    <<: *redis
+    volumes: ["../pilot/redis/server-lock.sh:/config/start.sh:ro"]
+    tmpfs: ["/data"]
+  redis-lock02: *lock
+  redis-lock03: *lock
+
+  https:
+    <<: *service
+    profiles: [https]
+    image: caddy:2-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+    environment:
+      DOMAIN: ${DOMAIN:?}
+    volumes: ["./Caddyfile:/etc/caddy/Caddyfile:ro", "tls:/data", "caddy-config:/config"]
+    ports: ["${BIND_IP:-0.0.0.0}:80:80", "${BIND_IP:-0.0.0.0}:443:443"]
+    depends_on: {pigeon: {condition: service_healthy}}
+
+  turn:
+    <<: *service
+    profiles: [turn]
+    image: coturn/coturn:4.6.3@sha256:71c3c990283385567f11794ee692e3a47b66fd9b0bb39e42afbe776e331dd888
+    environment:
+      BK_TURN_SECRET: ${BK_TURN_SECRET:-}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        test "$${#BK_TURN_SECRET}" -ge 32 || { echo "Generate TURN settings with configure.py --turn" >&2; exit 1; }
+        exec turnserver "$$@" --static-auth-secret="$$BK_TURN_SECRET"
+      - bk-turn
+    command:
+      - -c
+      - /etc/bk-turn.conf
+      - --realm=${DOMAIN:?}
+      - --external-ip=${PUBLIC_IP:?}
+    volumes: ["./turnserver.conf:/etc/bk-turn.conf:ro"]
+    ports:
+      - "${BIND_IP:-0.0.0.0}:3478:3478"
+      - "${BIND_IP:-0.0.0.0}:3478:3478/udp"
+      - "${BIND_IP:-0.0.0.0}:49160-49200:49160-49200/udp"
+
+volumes:
+  postgres:
+  rabbit:
+  redis:
+  user:
+  tls:
+  caddy-config:

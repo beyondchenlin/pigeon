@@ -16,11 +16,11 @@ headers = {
         ["Host"] = "lamda.local"
 },
 })
-local uid = res.headers["X-ClientId"]
 requ:close()
 if not (res and res.status == 200) then
         ngx.exit(404)
 end
+local uid = res.headers["X-ClientId"]
 
 local redis = require "resty.redis"
 local client = redis:new()

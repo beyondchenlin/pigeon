@@ -5,3 +5,7 @@
 html
 out
 .next
+.codex-*
+**/.env
+docker/data
+deploy/pilot/data

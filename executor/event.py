@@ -23,6 +23,7 @@ from msgpack import loads as msgpack_load, dumps as msgpack_dump
 from .queue import enqueue_event_and_get_first_if_idle, reordered_queue_add_event
 from .handlers.event import handle
 from .utils import *
+from . import bk_heartbeat
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
@@ -43,6 +44,8 @@ class EventConnectionService(object):
         client.on_message = self.mq_on_message
         client.max_queued_messages_set(65535)
         self.encode = "msgpack/zstd"
+        self.enrolled_heartbeats = os.environ.get("PIGEON_FORWARD_ONLY") == "1"
+        self.last_gateway_probe = {}
     def mq_on_connect(self, client, userdata, flags,
                                 reason, properties):
         if reason != 0: return None
@@ -61,7 +64,12 @@ class EventConnectionService(object):
         message["message_id"] = up["message_id"]
         message["session_id"] = up.get("session_id", "")
         message["sequence"] = int(up.get("sequence"))
-        self.get_func(message)(message)
+        if self.enrolled_heartbeats and message['type'] == 'status':
+            self.handle_PING(message)
+        else:
+            self.get_func(message)(message)
+        if self.enrolled_heartbeats:
+            bk_heartbeat.record(msg.topic, msg.retain, message, message['received'], self.last_gateway_probe)
     def mq_start(self):
         self.client.connect("/run/mosquitto/server.sock",
                                     1883, keepalive=60)

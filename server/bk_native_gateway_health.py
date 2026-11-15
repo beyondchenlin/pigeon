@@ -1,6 +1,7 @@
 """Conservative check that no untracked old nginx worker can serve traffic."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -9,12 +10,13 @@ import urllib.request
 from .bk_native_gateway_api import load_secret
 
 ROOT = Path('/user/phone-pilot')
-MANIFEST = ROOT / 'bk-gateway-health.json'
+MANIFEST = Path(os.environ.get('BK_GATEWAY_MANIFEST', ROOT / 'bk-gateway-health.json'))
+LUA_DIR = Path(os.environ.get('BK_GATEWAY_LUA_DIR', ROOT))
 FILES = {
     'config': Path('/usr/local/openresty/nginx/conf/nginx.conf'),
-    'access': ROOT / 'bk_native_gateway_access.lua',
-    'log': ROOT / 'bk_native_gateway_log.lua',
-    'health': ROOT / 'bk_native_gateway_health.lua',
+    'access': LUA_DIR / 'bk_native_gateway_access.lua',
+    'log': LUA_DIR / 'bk_native_gateway_log.lua',
+    'health': LUA_DIR / 'bk_native_gateway_health.lua',
 }
 URL = 'http://127.0.0.1:18981/_bk_gateway_health'
 

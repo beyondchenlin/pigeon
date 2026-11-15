@@ -77,6 +77,10 @@ class MqttClientAuthHandler(tornado.web.RequestHandler):
         domain, token = password.split(".", 1)
         device = get_device_by_domain(domain)
         raise_if(device.token_id != token, 403, "Invalid Mqtt client")
+        if os.environ.get("PIGEON_FORWARD_ONLY") == "1":
+            # Signed properties enrollment binds this identity before MQTT starts.
+            raise_if(device.dev_id != username, 403, "Device identity mismatch")
+            return
         with session_scope() as session:
             session.query(Device).filter(Device.id == device.id).update(
                                                     dict(dev_id=username),

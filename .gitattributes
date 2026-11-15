@@ -1,2 +1,4 @@
 *.BIN filter=lfs diff=lfs merge=lfs -text
 *.gz filter=lfs diff=lfs merge=lfs -text
+entry text eol=lf
+*.sh text eol=lf

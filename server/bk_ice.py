@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 from pathlib import Path
@@ -24,7 +25,14 @@ class IceHandler(BaseHttpService):
     def get(self, domain):
         self.get_login_user_device(domain)
         self.set_header('Cache-Control', 'no-store')
-        if not CONFIG.is_file():
+        host = os.environ.get('BK_TURN_HOST')
+        if host:
+            config = {'secret': os.environ['BK_TURN_SECRET'], 'stun_urls': [f'stun:{host}:3478'],
+                      'turn_urls': [f'turn:{host}:3478?transport=udp', f'turn:{host}:3478?transport=tcp']}
+            if not config['secret']:
+                self.throw(503, 'TURN_CONFIG', 'TURN secret is missing')
+            self.tell(issue(config, domain))
+        elif not CONFIG.is_file():
             self.tell({'iceServers': [{'urls': 'stun:stun.device-farm.com'}]})
-            return
-        self.tell(issue(json.loads(CONFIG.read_text()), domain))
+        else:
+            self.tell(issue(json.loads(CONFIG.read_text()), domain))

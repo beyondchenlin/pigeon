@@ -46,12 +46,11 @@ class Initializer(object):
         self.session.add(Config(name="sid", value=sid))
         self.session.add(Config(name="sapi_skey", value=skey))
         self.session.add(Config(name="sapi_ckey", value=ckey))
-        self.session.commit()
         meta = dict()
         meta["contact"]             = None
         meta["last_login_ip"]       = "0.0.0.0"
         meta["name"]                = "admin"
-        meta["password"]            = "pigeon"
+        meta["password"]            = os.environ.get("PIGEON_INITIAL_PASSWORD", "pigeon")
         meta["is_admin"]            = True
         self.session.add(User(**meta))
         self.session.commit()
@@ -90,3 +89,8 @@ if __name__ == "__main__":
                     os.environ.get("TOP_ENDPOINT"),
                     os.environ.get("TOP_CLIENT_KEY"),
                     os.environ.get("TOP_SECRET"))
+    if os.environ.get("PIGEON_FORWARD_ONLY") == "1":
+        # API and worker both need these tables at startup. Initialize them
+        # through the direct connection before supervisord starts either one.
+        from server.bk_ai_store import ensure_schema
+        ensure_schema(init_engine)

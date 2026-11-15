@@ -4,7 +4,7 @@ if ngx.var.uri ~= '/d/' .. ngx.var.id .. '/' or ngx.var.arg_native == '1' then
     return
 end
 
-local page = io.open('/user/phone-pilot/frontend/current/index.html', 'rb')
+local page = io.open(os.getenv('BK_CONSOLE_INDEX') or '/user/phone-pilot/frontend/current/index.html', 'rb')
           or io.open('/var/www/html/index.html', 'rb')
 if not page then
     ngx.exit(ngx.HTTP_SERVICE_UNAVAILABLE)

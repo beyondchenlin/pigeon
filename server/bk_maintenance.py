@@ -14,7 +14,7 @@ import uuid
 from server.service import BaseHttpService, Service
 from .bk_ai_transport import mapping, TransportError
 
-DOMAIN = 'umdax0nurk9o'
+DOMAIN = os.environ.get('BK_MAINTENANCE_DEVICE', 'umdax0nurk9o')
 PUBLIC_ORIGIN = os.environ.get('BK_MAINTENANCE_ORIGIN','https://dongfengqi.top')
 BASE = Path('/user/phone-pilot/maintenance')
 POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix='bk-maintenance')
