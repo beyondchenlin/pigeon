@@ -20,7 +20,7 @@ services:
   pigeon:
     <<: *service
     platform: linux/amd64
-    image: ${BK_IMAGE:-ghcr.io/beyondchenlin/bk-pigeon:0.5.1-standalone}
+    image: ${BK_IMAGE:-ghcr.io/beyondchenlin/bk-pigeon:0.5.2-standalone}
     depends_on:
       postgres: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}

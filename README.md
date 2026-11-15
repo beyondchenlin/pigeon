@@ -7,7 +7,7 @@ PIGEON is an open-source, locally-deployed Android device management and automat
 单独拉取 BK 应用镜像：
 
 ```sh
-docker pull ghcr.io/beyondchenlin/bk-pigeon:0.5.1-standalone
+docker pull ghcr.io/beyondchenlin/bk-pigeon:0.5.2-standalone
 ```
 
 下面保留上游部署步骤。原版 Compose 默认使用 `firerpa/pigeon:1.0`。

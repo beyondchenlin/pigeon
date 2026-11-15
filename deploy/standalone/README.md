@@ -6,12 +6,12 @@ BK 使用 Pigeon 原有的 Docker Compose 架构。应用镜像从仓库里的 V
 
 准备可运行 Linux amd64 容器的 Docker、Compose v2 或更新版本和 Python 3。Windows x64 电脑可以使用 Docker Desktop 的 Linux 容器模式。Linux x86-64 服务器可以使用 Docker Engine 和 Compose 插件。安装时需要访问 Docker Hub 和 GitHub Container Registry。手机从外网接入家里的电脑时，路由器也要能把相应端口转发给这台电脑。
 
-从[里程碑发布页](https://github.com/beyondchenlin/pigeon/releases/tag/bk-v0.5.1-standalone)下载并解压 `BK-Pigeon-0.5.1-standalone.zip`，进入包内的 `deploy/standalone` 目录。也可以从同一 Git tag 的完整源码进入该目录。默认应用镜像是 `ghcr.io/beyondchenlin/bk-pigeon:0.5.1-standalone`。发布页列有不可变摘要，需要锁定镜像时可在生成的 `.env` 中设置 `BK_IMAGE=ghcr.io/beyondchenlin/bk-pigeon@sha256:完整摘要`。
+从[里程碑发布页](https://github.com/beyondchenlin/pigeon/releases/tag/bk-v0.5.2-standalone)下载并解压 `BK-Pigeon-0.5.2-standalone.zip`，进入包内的 `deploy/standalone` 目录。也可以从同一 Git tag 的完整源码进入该目录。默认应用镜像是 `ghcr.io/beyondchenlin/bk-pigeon:0.5.2-standalone`。发布页列有不可变摘要，需要锁定镜像时可在生成的 `.env` 中设置 `BK_IMAGE=ghcr.io/beyondchenlin/bk-pigeon@sha256:完整摘要`。
 
 如需单独拉取 BK 应用镜像，可以执行：
 
 ```sh
-docker pull ghcr.io/beyondchenlin/bk-pigeon:0.5.1-standalone
+docker pull ghcr.io/beyondchenlin/bk-pigeon:0.5.2-standalone
 ```
 
 以下地址是示例，请换成**手机实际能访问的地址**。Windows 如使用 Python Launcher，可把 `python3` 换成 `py -3`。
@@ -69,7 +69,7 @@ docker compose up -d --no-build --wait
 
 设备空闲且收到 AI 任务时，桥接会唤醒手机，必要时打开 BK CLAW，待手机就绪后提交一次任务。关闭该设备的自动亮屏可将其 `prepare_unsecured` 改为 `false`。查看网页或查询任务状态不会触发亮屏。
 
-### 从 0.5.0 升级已有独立部署
+### 从 0.5.0 或 0.5.1 升级已有独立部署
 
 在原部署目录替换新版安装包内的部署文件，保留原 `.env`、Compose 项目名、私有配置及数据卷。若曾自定义旧镜像内的 `/opt/bk/devices.json`，先导出并将设备条目合并到 `/user/phone-pilot/bk-ai-devices.json`。若 `.env` 设置了 `BK_IMAGE`，更新到本版镜像标签或发布页的摘要。确认手机空闲后，仅更新应用服务。
 

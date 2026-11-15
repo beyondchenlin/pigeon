@@ -16,7 +16,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build the tagged revision and publish to GHCR
+      - name: Publish or verify the tagged GHCR image
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -26,6 +26,27 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bk-pigeon:$version"
           revision="$(git rev-parse HEAD)"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          pull_log="$RUNNER_TEMP/bk-image-pull.log"
+          if docker pull --platform linux/amd64 "$image" 2>"$pull_log"; then
+            docker image inspect "$image" | jq -e --arg sha "$revision" --arg version "$version" \
+              --arg source "https://github.com/$GITHUB_REPOSITORY" '.[0] |
+              .Os == "linux" and .Architecture == "amd64" and
+              .Config.Labels["org.opencontainers.image.revision"] == $sha and
+              .Config.Labels["org.opencontainers.image.version"] == $version and
+              .Config.Labels["org.opencontainers.image.source"] == $source'
+            container="$(docker create "$image")"
+            trap 'docker rm -v "$container" >/dev/null' EXIT
+            mkdir "$RUNNER_TEMP/bk-image-source"
+            docker cp "$container:/opt/bk/server/." "$RUNNER_TEMP/bk-image-source/"
+            for file in server/*.py; do
+              cmp "$file" "$RUNNER_TEMP/bk-image-source/${file#server/}"
+            done
+            echo "Verified published $image at $revision"
+            exit 0
+          elif ! grep -Eiq 'manifest unknown|manifest_unknown|manifest.*not found|: not found$' "$pull_log"; then
+            cat "$pull_log" >&2
+            exit 1
+          fi
           docker build --platform linux/amd64 -f deploy/standalone/Dockerfile \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$revision" \
