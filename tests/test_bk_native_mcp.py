@@ -133,6 +133,43 @@ class TransportTests(unittest.TestCase):
             self.assertEqual({'state':'connected','version':'44','package':mcp.PILOT_PACKAGE},mcp.discover())
             self.assertEqual(2,probe.call_count)
 
+    def test_installed_only_discovery_never_contacts_or_opens_the_app(self):
+        request = {'state_dir': '/unused', 'info': 'auto', 'method': 'GET',
+                   'path': '/api/v1/native-discovery', 'installed_only': True}
+        with patch.object(mcp, 'package_installed', return_value=True), patch.object(mcp, 'probe') as probe:
+            self.assertEqual({'state': 'installed', 'package': mcp.RELEASE_PACKAGE}, phone.bridge(request)['body'])
+            probe.assert_not_called()
+
+    @unittest.skipIf(sys.platform == 'win32', 'phone bridge locking requires Linux or Android')
+    def test_frozen_release_is_woken_under_guard_and_submitted_once(self):
+        info = mcp.info_for_package(mcp.RELEASE_PACKAGE)
+        for cold in (False, True):
+            with self.subTest(cold=cold), tempfile.TemporaryDirectory(prefix='bk-wake-') as directory:
+                phone.activate_guard(directory)
+                request = {'state_dir': directory, 'info': 'auto', 'native_info': info, 'method': 'POST',
+                           'path': '/api/v1/tasks', 'prepare_unsecured': True,
+                           'body': {'goal': 'calculate', 'request_id': self.task}}
+                events = []
+                def probe(*args, **kw):
+                    self.assertIn('input', events)
+                    events.append('probe')
+                    return {'state': 'not_ready' if cold and 'am' not in events else 'connected'}
+                def api(info, method, path, body=None):
+                    events.append((method, path))
+                    if path == '/api/v1/device':
+                        return {'http': 200, 'body': {'device': {'secure': False, 'ready': True, 'helper_available': True}}}
+                    return {'http': 200, 'body': {'task_id': self.task, 'status': 'done'}}
+                with patch.object(phone.subprocess, 'check_output', return_value='mWakefulness=Asleep'), \
+                     patch.object(phone.subprocess, 'run', side_effect=lambda args, **kw: events.append(args[0])), \
+                     patch.object(mcp, 'probe', side_effect=probe), patch.object(phone, 'api', side_effect=api), \
+                     patch.object(phone.time, 'sleep'):
+                    self.assertEqual(200, phone.bridge(request)['http'])
+                    self.assertEqual(200, phone.bridge(request)['http'])
+                self.assertEqual(1, events.count('input'))
+                self.assertEqual(int(cold), events.count('am'))
+                self.assertEqual(1, events.count(('POST', '/api/v1/tasks')))
+                self.assertEqual(('GET', '/api/v1/tasks/' + self.task), events[-1])
+
     @unittest.skipIf(sys.platform == 'win32', 'phone bridge locking requires Linux or Android')
     def test_automatic_discovery_reports_release_only_after_guard_check(self):
         with tempfile.TemporaryDirectory(prefix='bk-release-discovery-') as directory:

@@ -104,11 +104,14 @@ def wait_duration(method, path, body):
     return (body['timeout_ms'] + 999) // 1000
 
 
-def call(domain, method, path, body=None, *, discover_native=False, task_info=None, create_native=False, create_info=None):
+def call(domain, method, path, body=None, *, discover_native=False, task_info=None, create_native=False, create_info=None,
+         installed_only=False):
     wait_s = wait_duration(method, path, body)
     batched_evidence = evidence_batch_request(method, path, body)
     from .bk_device_channel import open_device
     config = mapping(domain)
+    if installed_only and not discover_native:
+        raise TransportError('invalid_discovery')
     if create_native:
         if (method != 'POST' or path != '/api/v1/tasks' or discover_native or task_info is not None
                 or (create_info is not None and create_info not in NATIVE_INFO_BY_PACKAGE.values())):
@@ -126,6 +129,8 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
         config = dict(config, info='auto' if release_package_enabled(domain) else NATIVE_INFO)
     prepare = method == 'POST' and path == '/api/v1/tasks' and config.get('prepare_unsecured', False)
     request = dict(method=method, path=path, body=body, info=config['info'], prepare_unsecured=prepare)
+    if installed_only:
+        request['installed_only'] = True
     if create_info is not None:
         request['native_info'] = create_info
     if config.get('runtime_env') is True:
@@ -148,13 +153,13 @@ def call(domain, method, path, body=None, *, discover_native=False, task_info=No
     # outside the control pool; these deadlines do not enlarge stop/query calls.
     # A batch performs at most four bounded three-second loopback reads. It does
     # not initialize UI, acquire a screen lease, or share a stop/query connection.
-    script_timeout = wait_s + 8 if wait_s is not None else (22 if prepare else (18 if batched_evidence else 12))
+    script_timeout = wait_s + 8 if wait_s is not None else (45 if prepare else (18 if batched_evidence else 12))
     rpc_timeout = script_timeout + 3
 
     device = None
     try:
         device = open_device(domain, rpc_timeout)
-        if (method == 'POST' and path == '/api/v1/tasks') or discover_native:
+        if (method == 'POST' and path == '/api/v1/tasks') or (discover_native and not installed_only):
             # FIRERPA 10.9's startup listener can suppress Android accessibility
             # until its UI driver is initialized. This read initializes the
             # normal coexistence path; shell-only RPC does not initialize it.

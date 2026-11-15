@@ -114,18 +114,19 @@ class MikaMcp:
         return data
 
 
+def package_installed(name):
+    result = subprocess.run(['pm', 'list', 'packages', name], capture_output=True,
+                            timeout=3, check=True)
+    return ('package:' + name).encode() in result.stdout.splitlines()
+
+
 def probe(info, package=PILOT_PACKAGE,
           transport_factory=LocalTransport, package_check=None):
     """Read-only discovery; never return the connection file or its secrets."""
     if package not in NATIVE_PACKAGES:
         return {'state': 'unsupported_package'}
     if package_check is None:
-        def package_check(name):
-            result = subprocess.run(['pm', 'list', 'packages', name], capture_output=True,
-                                    timeout=3, check=False)
-            if result.returncode != 0:
-                raise OSError('package_check_failed')
-            return ('package:' + name).encode() in result.stdout.splitlines()
+        package_check = package_installed
     try:
         if not package_check(package):
             return {'state': 'not_installed'}

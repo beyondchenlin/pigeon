@@ -174,10 +174,13 @@ def reconcile(task_id, submit=False):
                 if admission_error:
                     change(row, 'rejected', admission_error)
                     return
-            if mapping(domain).get('info') == 'auto':
-                discovery = call(domain, 'GET', '/api/v1/native-discovery', discover_native=True)
+            config = mapping(domain)
+            if config.get('info') == 'auto':
+                prepare = config.get('prepare_unsecured') is True
+                discovery = call(domain, 'GET', '/api/v1/native-discovery', discover_native=True,
+                                 **({'installed_only': True} if prepare else {}))
                 body = discovery.get('body')
-                if discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'not_ready':
+                if not prepare and discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'not_ready':
                     # An admitted task exclusively owns the device here. Open
                     # the app once, preserving its connection switch, and
                     # require a fresh successful MCP + guard probe before send.
@@ -191,7 +194,8 @@ def reconcile(task_id, submit=False):
                         body = discovery.get('body')
                 package = body.get('package', PILOT_PACKAGE) if isinstance(body, dict) else None
                 selected_info = NATIVE_INFO_BY_PACKAGE.get(package)
-                ready = discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == 'connected' and selected_info is not None
+                expected = 'installed' if prepare else 'connected'
+                ready = discovery.get('http') == 200 and isinstance(body, dict) and body.get('state') == expected and selected_info is not None
                 with session_scope() as s:
                     row = s.query(AiTask).filter_by(id=task_id).with_for_update().one()
                     if row.status in TERMINAL or row.cancel_requested or (row.sync_meta or {}).get('dispatch_started_at'):

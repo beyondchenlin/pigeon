@@ -207,6 +207,39 @@ def api(info, method, path, body=None):
         return {'http': 502, 'body': {'error': {'code': 'delivery_unknown'}}}
 
 
+def prepare_native(info, package):
+    """Wake independently of MCP. Activate its UI only if MCP still cannot answer."""
+    from bk_native_mcp import probe
+
+    def run(args):
+        subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3, check=True)
+
+    power = subprocess.check_output(['dumpsys', 'power'], timeout=3, text=True)
+    if not re.search(r'^\s*mWakefulness=Awake\s*$', power, re.MULTILINE):
+        run(['input', 'keyevent', 'KEYCODE_WAKEUP'])
+    run(['wm', 'dismiss-keyguard'])
+    deadline = time.monotonic() + 10
+    opened = False
+    while True:
+        status = probe(info, package=package)['state']
+        if status == 'connected':
+            reply = api(info, 'GET', '/api/v1/device')
+            device = reply.get('body', {}).get('device', {})
+            if device.get('secure') is True:
+                return False
+            if (reply['http'] == 200 and device.get('secure') is False
+                    and device.get('ready') is True and device.get('helper_available') is True):
+                return True
+        elif status == 'not_ready' and not opened:
+            run(['am', 'start', '-n', package + '/com.wangzan101.mika.ui.MainActivity'])
+            opened = True
+        elif status != 'not_ready':
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(.4)
+
+
 def prepare_unsecured(info):
     """Opt-in kiosk preparation using Android's normal keyguard dismissal.
 
@@ -218,6 +251,8 @@ def prepare_unsecured(info):
         package = INFO_PACKAGES.get(info)
         if not package:
             return False
+        if package in NATIVE_MCP_PACKAGES:
+            return prepare_native(info, package)
         component = package + '/com.wangzan101.mika.ui.MainActivity'
         for args in (['input', 'keyevent', 'KEYCODE_WAKEUP'], ['wm', 'dismiss-keyguard'],
                      ['am', 'start', '-n', component]):
@@ -310,6 +345,13 @@ def bridge(request):
     method, path, body = request['method'], request['path'], request.get('body')
     automatic = info == 'auto'
     task_id = None
+    if (method == 'GET' and path == '/api/v1/native-discovery' and body is None
+            and request.get('installed_only') is True and (automatic or info == NATIVE_INFO)):
+        from bk_native_mcp import package_installed
+        for package in (NATIVE_MCP_PACKAGES if automatic else (NATIVE_MCP_PACKAGE,)):
+            if package_installed(package):
+                return {'http': 200, 'body': {'state': 'installed', 'package': package}}
+        return {'http': 200, 'body': {'state': 'not_installed'}}
     if automatic and method == 'GET' and path == '/api/v1/native-discovery' and body is None:
         from bk_native_mcp import discover
         result = discover()
@@ -338,7 +380,9 @@ def bridge(request):
             package = INFO_PACKAGES.get(chosen)
             if package not in NATIVE_MCP_PACKAGES:
                 return {'http': 400, 'body': {'error': {'code': 'invalid_argument'}}}
-            if probe(chosen, package=package).get('state') != 'connected':
+            # An opted-in task checks the live MCP identity after acquiring the
+            # input lease and waking Android. A frozen app cannot answer here.
+            if request.get('prepare_unsecured') is not True and probe(chosen, package=package).get('state') != 'connected':
                 return {'http': 409, 'body': {'error': {'code': 'device_not_ready'}}}
             info = chosen
         if not valid_info(info):

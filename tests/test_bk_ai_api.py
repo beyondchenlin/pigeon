@@ -129,6 +129,23 @@ class NativeOnboardApiTests(AsyncHTTPTestCase):
         run.assert_called_once()
 
 class AiApiTests(AsyncHTTPTestCase):
+    def test_wake_enabled_task_selects_installed_app_without_contacting_it(self):
+        from server.bk_ai_transport import RELEASE_INFO, RELEASE_PACKAGE
+        calls = []
+        def phone(domain, method, path, body=None, **options):
+            calls.append((method, options))
+            if method == 'GET':
+                self.assertTrue(options['installed_only'])
+                return {'http': 200, 'body': {'state': 'installed', 'package': RELEASE_PACKAGE}}
+            return {'http': 200, 'body': {'task_id': body['request_id'], 'status': 'running'}}
+        with patch.object(api, 'mapping', return_value={'info': 'auto', 'prepare_unsecured': True}), \
+             patch.object(api, 'call', side_effect=phone), patch.object(api, 'open_native_app') as launch:
+            _, (_, response) = self.submit()
+        self.assertEqual('running', response['data']['status'])
+        self.assertEqual(['GET', 'POST'], [method for method, options in calls])
+        self.assertEqual(RELEASE_INFO, calls[1][1]['create_info'])
+        launch.assert_not_called()
+
     def test_release_task_remains_bound_to_release_package(self):
         from server.bk_ai_transport import RELEASE_INFO, RELEASE_PACKAGE
         calls=[]
