@@ -14,6 +14,7 @@ const receipt = {
   goal: '单机测试任务', status: 'running', created_at: 1700000000,
 };
 const requests = [];
+let activePhoneTask = true;
 async function handleApi(req, path) {
   let body = '';
   for await (const chunk of req) body += chunk;
@@ -23,6 +24,9 @@ async function handleApi(req, path) {
     case '/api/v1/device/phonea': return { domain:'phonea', state:'online', model:'测试手机' };
     case '/api/v1/device/phonea/status':
       return [1, 2, 3].map(i => ({ timestamp:1700000000+i, cpu_percent:i, mem_percent:60 }));
+    case '/api/v1/device/phonea/ai/manual-control':
+      if (JSON.parse(body).action === 'claim' && activePhoneTask) return { state:'ai', task_id:receipt.task_id };
+      return { state: JSON.parse(body).action === 'release' ? 'watching' : 'held' };
     case '/api/v1/ai/models': return { user_id:1, models:[{ id:1, provider:'openai', name:'测试模型' }] };
     case '/api/v1/ai/jobs': return { jobs:[] };
     case '/api/v1/ai/chat/plan': return { clarification:'请补充任务说明' };
@@ -59,7 +63,8 @@ try {
  const target=await call('Target.createTarget',{url:'about:blank'},null);session=(await call('Target.attachToTarget',{targetId:target.targetId,flatten:true},null)).sessionId;await call('Page.enable');await call('Runtime.enable');
  await call('Page.addScriptToEvaluateOnNewDocument',{source:`window.sentTouches=[]; window.openedSockets=[]; class MockWS { static OPEN=1; constructor(url){window.openedSockets.push(url);this.url=url;this.readyState=0;this.bufferedAmount=0;setTimeout(()=>{this.readyState=1;this.onopen?.({});if(url.includes('/ws/command')) this.onmessage?.({data:JSON.stringify({type:'status',data:{}})});},20)} send(s){if(s==='status' && this.url.includes('/ws/command')) this.onmessage?.({data:JSON.stringify({type:'status',data:{cpu_percent:5,mem_percent:60}})});if(this.url.includes('/ws/screen/touch')){const v=JSON.parse(s);window.sentTouches.push(v);if(v.action==='reset')setTimeout(()=>this.onmessage?.({data:JSON.stringify({type:'OK',w:1080,h:2388})}),20)}} close(){this.readyState=3}};window.WebSocket=MockWS;`});
  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});await call('Page.navigate',{url:base+'/?transport=ws#/control/phonea'});
- await wait(`document.querySelector('[data-control-state="live"]') && document.querySelector('[data-input-transport="wss"]')`);
+ await wait(`document.querySelector('[data-control-state="live"]') && document.querySelector('[data-input-transport="none"]')`);
+ assert.equal(await ev(`window.openedSockets.some(u=>u.includes('/ws/screen/touch'))`),false);
  assert.equal(await ev(`document.querySelector('[role=tab][aria-selected=true]').id`),'tab-evidence');
  const frameSize = await ev(`(()=>{const r=document.querySelector('canvas[aria-label="手机实时远控画面"]').getBoundingClientRect();return {width:r.width,height:r.height}})()`);
  assert.ok(Math.abs(frameSize.width / frameSize.height - 20 / 40) < 0.01);
@@ -78,8 +83,18 @@ try {
  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
  await wait(`document.querySelector('canvas[aria-label="手机实时远控画面"]').getBoundingClientRect().height < 900`);
  const rect=await ev(`(()=>{const r=document.querySelector('canvas[aria-label="手机实时远控画面"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+ await ev(`window.confirmCalls=0;window.confirm=()=>{window.confirmCalls++;return false};true`);
+ await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...rect});
+ await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...rect});
+ await wait(`window.confirmCalls === 1`);
+ assert.equal(await ev(`window.sentTouches.length`),0);
+ assert.ok(!requests.some(r=>r.path.endsWith('/takeover')));
+ await wait(`document.querySelector('.control-indicator')?.textContent === '仅观看'`);
+ activePhoneTask = false;
  await call('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...rect});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...rect});
  await wait(`window.sentTouches.some(x=>x.action==='up')`);assert.deepEqual(await ev(`window.sentTouches.filter(x=>x.action==='down'||x.action==='up').map(x=>x.action)`),['down','up']);assert.equal(await ev(`document.querySelector('.device-workbench').classList.contains('workbench-clean')`),false);
+ await wait(`document.querySelector('.control-indicator')?.textContent === '仅观看'`);
+ assert.equal(requests.filter(r=>r.path.endsWith('/manual-control') && r.body.action === 'release').length,2);
  await ev(`document.querySelector('button[aria-label="进入纯画面"]').click()`);assert.equal(await ev(`document.querySelector('.device-workbench').classList.contains('workbench-clean')`),true);await ev(`document.querySelector('button[aria-label="退出纯画面"]').click()`);assert.equal(await ev(`document.querySelector('.device-workbench').classList.contains('workbench-clean')`),false);
  await ev(`window.initialCanvas = document.querySelector('canvas[aria-label="手机实时远控画面"]'); true`);
  async function clickTab(name) {

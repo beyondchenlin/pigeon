@@ -11,7 +11,8 @@ from tornado.ioloop import PeriodicCallback
 from server.service import BaseHttpService, Service
 from executor.models import session_scope, engine, Device, UserDevice
 from .bk_ai_store import (AiTask, AiAnswer, question_key, TERMINAL, active, locked_device, reload_busy,
-    script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel)
+    script_busy, change, describe, install_script_guard, ensure_schema, update_sync, request_cancel,
+    manually_controlled, manual_control)
 from .bk_ai_transport import (call, mapping, open_native_app, TransportError, refusal_code, NATIVE_INFO,
                               NATIVE_INFO_BY_PACKAGE, PILOT_PACKAGE, release_package_enabled)
 from .bk_maintenance import PUBLIC_ORIGIN
@@ -140,6 +141,8 @@ def scheduled_admission_error(session, row):
         return 'access_revoked_before_dispatch'
     if device.state != 'online':
         return 'device_offline_before_dispatch'
+    if manually_controlled(session, device):
+        return 'manual_control'
     if reload_busy(session, device.id):
         return 'device_reload_before_dispatch'
     return None
@@ -512,7 +515,9 @@ class AiHandler(BaseHttpService):
                 return
             if current.state != 'online':
                 self.throw(503, 'AI_OFFLINE', 'Device is offline; nothing was submitted')
-            if current.controlling or script_busy(s, device.id) or active(s, device.id) or reload_busy(s, device.id):
+            if manually_controlled(s, current):
+                self.throw(409, 'MANUAL_CONTROL', '人工接管中，任务未下发')
+            if script_busy(s, device.id) or active(s, device.id) or reload_busy(s, device.id):
                 self.throw(409, 'AI_BUSY', 'Device has an active controller, script or unresolved AI task')
             now = time.time()
             row = AiTask(id=task_id, device_id=device.id, user_id=user.id, request_id=request_id,
@@ -560,6 +565,24 @@ class AiHandler(BaseHttpService):
         finally:
             INFLIGHT.discard(task_id)
         self.tell(self.lookup(domain, task_id))
+
+
+class ManualControlHandler(AiHandler):
+    SUPPORTED_METHODS = ('POST',)
+
+    def post(self, domain):
+        user, device = self.get_login_user_device(domain)
+        body = self.body()
+        token, action = body.get('token'), body.get('action')
+        try:
+            valid = isinstance(token, str) and str(uuid.UUID(token)) == token
+        except ValueError:
+            valid = False
+        if not valid or action not in ('claim', 'renew', 'release'):
+            self.throw(400, 'MANUAL_REQUEST', 'Invalid control request')
+        with session_scope() as session:
+            result = manual_control(session, device.id, user.id, token, action)
+        self.tell(result)
 
 
 class NativeOnboardHandler(AiHandler):
@@ -641,6 +664,8 @@ def install():
     original = Service.__init__
     def initialize(self, *args, **kwargs):
         original(self, *args, **kwargs)
+        self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/manual-control',
+                              'server.bk_ai', handler='ManualControlHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/native-discovery',
                               'server.bk_ai', handler='NativeDiscoveryHandler')
         self.http.add_handler(r'/api/v1/device/([a-z0-9]+)/ai/native-onboard',

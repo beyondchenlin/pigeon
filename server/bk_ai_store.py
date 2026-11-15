@@ -31,6 +31,53 @@ class AiTask(Base):
     __table_args__ = (UniqueConstraint('device_id', 'request_id'),)
 
 
+class ManualControl(Base):
+    __tablename__ = 'bk_manual_control'
+    device_id = Column(Integer, ForeignKey('device.id'), primary_key=True)
+    user_id = Column(Integer, ForeignKey('user.id'), nullable=False)
+    token = Column(String(36), nullable=False)
+    expires = Column(Float, nullable=False)
+
+
+def manually_controlled(session, device):
+    if device.controlling:
+        return True
+    claim = session.get(ManualControl, device.id)
+    return bool(claim and claim.expires > time.time())
+
+
+def manual_control(session, device_id, user_id, token, action):
+    device = locked_device(session, device_id)
+    claim = session.get(ManualControl, device_id)
+    owns = claim and (claim.user_id, claim.token) == (user_id, token)
+    now = time.time()
+    if action == 'release':
+        if owns:
+            session.delete(claim)
+        return {'state': 'watching'}
+    if claim and claim.expires > now and owns:
+        claim.expires = now + 12
+        return {'state': 'held'}
+    if action == 'renew':
+        return {'state': 'expired'}
+    if device.is_deleted or device.state != 'online':
+        return {'state': 'offline'}
+    if manually_controlled(session, device):
+        return {'state': 'manual'}
+    task = active(session, device_id)
+    if task:
+        if task.user_id == user_id:
+            return {'state': 'ai', 'task_id': task.id}
+        return {'state': 'busy'}
+    if script_busy(session, device_id) or reload_busy(session, device_id):
+        return {'state': 'busy'}
+    if claim is None:
+        claim = ManualControl(device_id=device_id)
+        session.add(claim)
+    claim.user_id, claim.token, claim.expires = user_id, token, now + 12
+    return {'state': 'held'}
+
+
 class AiAnswer(Base):
     __tablename__ = 'bk_ai_answer'
     id = Column(String(36), primary_key=True)
@@ -97,6 +144,7 @@ def request_cancel(row, reason='user_stop'):
 def ensure_schema(engine):
     """Add only nullable receipt metadata; no existing task is rewritten."""
     AiTask.__table__.create(engine, checkfirst=True)
+    ManualControl.__table__.create(engine, checkfirst=True)
     from .bk_native_gateway import NativeGatewayConnection
     NativeGatewayConnection.__table__.create(engine, checkfirst=True)
     from .bk_native_reload import NativeReload
@@ -139,7 +187,7 @@ def install_script_guard():
 
     def dispatch(session, dt):
         device = locked_device(session, dt.device_id)
-        if device.controlling or active(session, device.id) or reload_busy(session, device.id):
+        if manually_controlled(session, device) or active(session, device.id) or reload_busy(session, device.id):
             return None
         if dt.job.mode == 'deadline':
             from sqlalchemy.orm.attributes import set_committed_value

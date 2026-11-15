@@ -11,7 +11,7 @@ import { createPhoneTouch, type TouchPayload } from '@/lib/phone-touch';
 import { phoneFrame } from '@/lib/phone-frame';
 import { type VideoPreference, type VideoProfile } from '@/lib/video-policy';
 
-const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean; videoPreference?: VideoPreference }>();
+const props = defineProps<{ deviceId: string; online: boolean; commandReady: boolean; requestCommand: PhoneRequest; acquire: () => Promise<boolean>; held: boolean; activity: () => void; rotation?: number; immersive?: boolean; controlsVisible?: boolean; textBusy?: boolean; videoPreference?: VideoPreference }>();
 const emit = defineEmits<{ command: [command: string, data: unknown]; log: [message: string]; compose: []; tools: [] }>();
 const canvas = ref<HTMLCanvasElement>();
 const video = ref<HTMLVideoElement>();
@@ -81,6 +81,24 @@ let generation = 0;
 let frameTimer: ReturnType<typeof setInterval> | undefined;
 let moveRaf = 0;
 let lastMove: PointerEvent | undefined;
+// Preserve the first tap while the device acknowledges the control claim.
+let first: { down: PointerEvent; move?: PointerEvent; up?: PointerEvent; granted: boolean } | undefined;
+let firstTimeout: ReturnType<typeof setTimeout> | undefined;
+let reopenInput: (() => void) | undefined;
+function forgetFirst() { clearTimeout(firstTimeout); first = undefined; }
+function deliverFirst() {
+  if (!first?.granted || !props.held || !touchReady.value) return;
+  const gesture = first;
+  forgetFirst();
+  if (!send('down', gesture.down)) return;
+  keyboard.value?.focus({ preventScroll: true });
+  pointer = gesture.down.pointerId;
+  if (gesture.move) send('move', gesture.move);
+  if (gesture.up) { release(); props.activity(); }
+}
+function endControl() {
+  forgetFirst(); release(); blurInput(); touch?.deactivate();
+}
 
 function release() {
   cancelAnimationFrame(moveRaf); moveRaf = 0; lastMove = undefined;
@@ -88,7 +106,8 @@ function release() {
   pointer = null;
 }
 function stop() {
-  generation++; release(); blurInput(); clearInterval(frameTimer);
+  generation++; forgetFirst(); release(); blurInput(); clearInterval(frameTimer);
+  reopenInput = undefined;
   touch?.close(); dispose?.(); dispose = undefined;
   touch = undefined; touchReady.value = false; fps.value = 0; mediaRtt.value = null; mediaPath.value = 'unknown';
   inputTransport.value = 'none'; inputRtt.value = null; detailFrame.value = false;
@@ -99,8 +118,8 @@ function start() {
   const own = generation;
   let count = 0, measured = performance.now();
   const valid = () => own === generation && enabled.value;
-  touch = createPhoneTouch({ url: deviceSocket(props.deviceId, '/ws/screen/touch'),
-    ready: (ready, size) => { if (valid()) { touchReady.value = ready; if (size) dimensions = size; } },
+  touch = createPhoneTouch({ url: deviceSocket(props.deviceId, '/ws/screen/touch'), lazy: true,
+    ready: (ready, size) => { if (valid()) { touchReady.value = ready; if (size) dimensions = size; if (ready) deliverFirst(); } },
     lost: () => { cancelAnimationFrame(moveRaf); moveRaf = 0; lastMove = undefined; pointer = null; },
     log: message => { if (valid()) emit('log', message); },
     stats: (route, rtt) => { if (valid()) { inputTransport.value = route; inputRtt.value = rtt; } }
@@ -114,7 +133,7 @@ function start() {
     snapshot: (short,signal) => phoneFrame(props.deviceId,short,signal),
     detail: active => { if(valid())detailFrame.value=active; },
     profile: value => { if(valid())videoProfile.value=value; },
-    inputChannel: channel => { if (valid() && touch) touch.attach(channel); else channel.close(); },
+    inputChannel: (channel, reopen) => { if (valid() && touch) { touch.attach(channel); reopenInput = reopen; } else channel.close(); },
     loadIceServers: async () => {
       const response = await apiRequest<{ iceServers: RTCIceServer[] }>(`/api/v1/device/${encodeURIComponent(props.deviceId)}/ice`, { signal: AbortSignal.timeout(3000) });
       return response.data?.iceServers ?? [];
@@ -128,7 +147,7 @@ function start() {
   frameTimer = setInterval(() => { const now = performance.now(); fps.value = Math.round(count * 1000 / (now - measured)); measured = now; count = 0; }, 2000);
 }
 function send(action: TouchPayload['action'], event?: PointerEvent) {
-  if (!touchReady.value || !touch || state.value !== 'live') return false;
+  if (!props.held || !touchReady.value || !touch || state.value !== 'live') return false;
   dispose?.interact();
   let payload: TouchPayload = { action, id: 0 };
   if (event && canvas.value) {
@@ -142,27 +161,39 @@ function send(action: TouchPayload['action'], event?: PointerEvent) {
   return touch.send(payload);
 }
 function down(e: PointerEvent) {
-  if (e.button !== 0 || pointer !== null) return;
+  if (e.button !== 0 || pointer !== null || first || state.value !== 'live') return;
   if (props.textBusy) return;
   if (input.busy) { input.flush(); emit('log', '文字正在写入手机，请稍后再点击'); return; }
-  if (!touchReady.value && touch && state.value === 'live') {
-    emit('log', '正在连接触控，请连接后再操作');
-    return;
-  }
-  if (send('down', e)) { keyboard.value?.focus({ preventScroll: true }); pointer = e.pointerId; canvas.value?.setPointerCapture(e.pointerId); }
+  const gesture = { down: e, granted: false };
+  first = gesture;
+  canvas.value?.setPointerCapture(e.pointerId);
+  void props.acquire().then(granted => {
+    if (first !== gesture) return;
+    if (!granted) { forgetFirst(); return; }
+    gesture.granted = true;
+    reopenInput?.(); touch?.activate();
+    firstTimeout = setTimeout(() => {
+      if (first === gesture) { forgetFirst(); emit('log', '触控未就绪，本次手势未发送'); }
+    }, 3000);
+    deliverFirst();
+  });
 }
 function move(e: PointerEvent) {
+  if (first?.down.pointerId === e.pointerId) { first.move = e; return; }
   if (pointer !== e.pointerId) return; lastMove = e;
   if (!moveRaf) moveRaf = requestAnimationFrame(() => { moveRaf = 0; if (lastMove && (touch?.bufferedAmount ?? 0) < 32768) send('move', lastMove); lastMove = undefined; });
 }
 function up(e: PointerEvent) {
+  if (first?.down.pointerId === e.pointerId) { first.up = e; return; }
   if (pointer !== e.pointerId) return;
   if (lastMove && (touch?.bufferedAmount ?? 0) < 32768) send('move', lastMove);
-  release(); if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId);
+  release(); props.activity(); if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId);
 }
+function cancelPointer() { forgetFirst(); release(); props.activity(); }
+function lostCapture() { if (!first?.up) cancelPointer(); }
 function key(code: number) { dispose?.interact(); emit('command', 'device/input/keycode', [0, code]); }
 function reconnect() { paused.value = false; start(); }
-defineExpose({ reconnect, interact: () => dispose?.interact(), isTyping: () => input.busy, releaseKeyboard: blurInput, fps, mode, mediaRtt, touchReady, videoProfile });
+defineExpose({ reconnect, interact: () => dispose?.interact(), isTyping: () => input.busy, inputBusy: () => !!first || pointer !== null || input.busy || composing.value, endControl, releaseKeyboard: blurInput, fps, mode, mediaRtt, touchReady, videoProfile });
 function visibility() { visible.value = !document.hidden; }
 function fullscreenChanged() { fullscreen.value = document.fullscreenElement === panel.value; }
 function fullscreenKey(event: KeyboardEvent) {
@@ -203,6 +234,7 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 
 <template>
   <div ref="panel" class="phone-control overflow-hidden rounded-lg border border-border bg-background" :style="navigationStyle" :class="{ immersive, 'controls-hidden': immersive && !controlsVisible }">
+    <span v-if="controlsVisible" class="control-indicator" :class="{ held }" role="status">{{ held ? '人工接管中' : '仅观看' }}</span>
     <div class="phone-heading flex items-center justify-between gap-2 border-b px-3 text-xs">
       <span class="font-semibold">实时画面</span>
       <div class="flex items-center gap-2"><span class="mr-1 text-muted-foreground">{{ mode === 'webrtc' ? 'WebRTC' : mode === 'h264' ? 'H.264' : '兼容模式' }}</span>
@@ -212,9 +244,9 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
     </div>
     <div ref="viewport" class="screen-viewport relative flex items-center justify-center bg-background" :data-control-state="state" :data-control-frames="frames" :data-video-transport="mode" :data-media-rtt="mediaRtt" :data-media-path="mediaPath" :data-input-transport="inputTransport" :data-input-rtt="inputRtt">
       <video ref="video" :style="canvasStyle" class="rtc-video" :class="{ 'rtc-visible': nativeVideo && mode === 'webrtc' && state === 'live' }" autoplay muted playsinline disablepictureinpicture aria-hidden="true" />
-      <canvas ref="canvas" :style="canvasStyle" :class="{ 'rtc-input': nativeVideo && mode === 'webrtc' && state === 'live', 'detail-frame':detailFrame }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="up" @lostpointercapture="release" @contextmenu.prevent />
+      <canvas ref="canvas" :style="canvasStyle" :class="{ 'rtc-input': nativeVideo && mode === 'webrtc' && state === 'live', 'detail-frame':detailFrame }" class="block touch-none select-none" aria-label="手机实时远控画面" @pointerdown.prevent="down" @pointermove.prevent="move" @pointerup="up" @pointercancel="cancelPointer" @lostpointercapture="lostCapture" @contextmenu.prevent />
       <textarea ref="keyboard" class="phone-keyboard" aria-label="手机文字输入" autocomplete="off" autocapitalize="off" :spellcheck="false" inputmode="none" @keydown="keyboardDown" @input="inputText" @compositionstart="composing = true" @compositionend="composing = false; inputText()" @paste="paste" @blur="blurInput" />
-      <div v-if="state === 'live' && !touchReady" role="status" class="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">正在连接触控，请稍候…</div>
+      <div v-if="held && first && state === 'live' && !touchReady" role="status" class="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">正在连接触控，请稍候…</div>
       <div v-if="state !== 'live'" role="status" class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#f2f5f3] px-4 text-center text-sm text-[#667b6e]"><WifiOff v-if="!online || state === 'reconnecting'" class="h-5 w-5" /><LoaderCircle v-else-if="!paused && visible" class="h-5 w-5 animate-spin motion-reduce:animate-none" /><span>{{ !online ? '设备离线，等待重新连接' : paused || !visible ? '画面已暂停' : state === 'reconnecting' ? '画面重连中…' : '正在连接手机画面…' }}</span></div>
     </div>
     <div class="phone-navigation border-t" role="group" aria-label="手机操作">
@@ -232,6 +264,8 @@ onBeforeUnmount(() => { stop(); resizeObserver?.disconnect(); document.removeEve
 
 <style scoped>
 .phone-control { display: flex; flex-direction: column; min-width: 0; }
+.control-indicator { position: absolute; top: 12px; right: 12px; z-index: 12; pointer-events: none; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--muted-foreground); font-size: 12px; }
+.control-indicator.held { color: #92400e; background: #fffbeb; border-color: #fcd34d; }
 .phone-heading { min-height: 42px; flex-shrink: 0; }
 .screen-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 4px; }
 .screen-action:hover { background: var(--muted); }

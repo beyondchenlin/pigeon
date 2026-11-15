@@ -7,7 +7,7 @@ import time
 import uuid
 from sqlalchemy import Column, Float, ForeignKey, Integer, String
 from executor.models import Base, Device, Task, UserDevice
-from .bk_ai_store import AiTask, TERMINAL
+from .bk_ai_store import AiTask, TERMINAL, manually_controlled
 
 
 class NativeReload(Base):
@@ -41,7 +41,7 @@ def reserve(session, device_id, user_id, attempt_id):
         # replaced by another ID in the hope that the new one succeeds.
         if current.phase not in ('ready', 'not_sent'):
             raise ValueError('reload_unconfirmed')
-    if device.state != 'online' or device.controlling:
+    if device.state != 'online' or manually_controlled(session, device):
         raise ValueError('device_unavailable')
     from .bk_native_gateway import NativeGatewayConnection
     if session.query(NativeGatewayConnection.connection_id).filter_by(device_id=device_id).first():

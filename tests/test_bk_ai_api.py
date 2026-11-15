@@ -24,6 +24,7 @@ from tornado.platform.asyncio import BaseAsyncIOLoop
 from executor.models import Device, Task
 from server import bk_ai as api
 from server.bk_ai_store import AiTask, AiAnswer, active, script_busy
+from server.bk_ai_store import ManualControl
 from server.bk_native_reload import NativeReload
 
 
@@ -223,7 +224,7 @@ class AiApiTests(AsyncHTTPTestCase):
 
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
-        for table in (Device.__table__, Task.__table__, AiTask.__table__, AiAnswer.__table__, NativeReload.__table__):
+        for table in (Device.__table__, Task.__table__, AiTask.__table__, AiAnswer.__table__, ManualControl.__table__, NativeReload.__table__):
             table.create(self.engine)
         factory = sessionmaker(self.engine, expire_on_commit=False)
         @contextmanager

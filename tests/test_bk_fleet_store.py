@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from executor.models import Device, DeviceJob, Group, Job, Task, User, UserDevice
 from server.bk_ai_store import AiTask
+from server.bk_ai_store import ManualControl, manual_control
 from server.bk_native_reload import NativeReload
 from server.bk_fleet_store import (BK_RUNNING, BK_STOPPED, cancel_job, create_job,
                                    materialize_due, sync_job_results)
@@ -21,7 +22,7 @@ class FleetStoreTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://')
         for table in (User.__table__, Device.__table__, Group.__table__, UserDevice.__table__,
-                      Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__, NativeReload.__table__):
+                      Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__, ManualControl.__table__, NativeReload.__table__):
             table.create(self.engine)
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         with self.Session.begin() as session:
@@ -91,6 +92,24 @@ class FleetStoreTests(unittest.TestCase):
             self.assertEqual(materialize_due(session, job_id, now=1800000060), [])
             self.assertEqual({row.reason for row in session.query(Task)}, {'missed_schedule'})
             self.assertEqual(session.query(AiTask).count(), 0)
+
+    def test_manual_claim_and_task_admission_exclude_each_other(self):
+        token = str(uuid.uuid4())
+        with self.Session.begin() as s:
+            self.assertEqual(manual_control(s, 1, 1, token, 'claim')['state'], 'held')
+            self.assertEqual(manual_control(s, 1, 1, str(uuid.uuid4()), 'claim')['state'], 'manual')
+            manual_control(s, 1, 1, str(uuid.uuid4()), 'release')
+            job, _ = create_job(s, 1, str(uuid.uuid4()), self.plan, now=1800000000)
+            self.assertEqual(materialize_due(s, job.id, now=1800000001), [])
+            self.assertEqual(s.query(Task).filter_by(device_id=1).one().reason, 'manual_control')
+            self.assertEqual(s.query(AiTask).count(), 0)
+            manual_control(s, 1, 1, token, 'release')
+            self.assertEqual(manual_control(s, 1, 1, token, 'renew')['state'], 'expired')
+            job, _ = create_job(s, 1, str(uuid.uuid4()), self.plan, now=1800000001)
+            ids = materialize_due(s, job.id, now=1800000002)
+            self.assertEqual(len(ids), 1)
+            self.assertEqual(manual_control(s, 1, 1, token, 'claim'), {'state': 'ai', 'task_id': ids[0]})
+            self.assertFalse(s.get(AiTask, ids[0]).cancel_requested)
 
     def test_scheduled_round_does_not_dispatch_during_reload(self):
         with self.Session.begin() as session:

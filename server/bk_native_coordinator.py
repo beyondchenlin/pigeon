@@ -6,6 +6,7 @@ from pathlib import Path
 import uuid
 
 from executor.models import Device, UserDevice, session_scope
+from .bk_ai_store import manually_controlled
 from .bk_device_channel import open_device
 from .bk_ai_transport import release_package_enabled
 from .bk_native_gateway_health import check_gateway
@@ -130,7 +131,7 @@ def _resume_reserved(domain, user_id, device_id, attempt_id, *, bridge_only=Fals
         command = prepare_restart(device, BUNDLE_DIR, restart_id, reuse=reuse)
         with session_scope() as session:
             current = _identity(session, domain, user_id)
-            if current.state != 'online' or current.controlling or not check_gateway():
+            if current.state != 'online' or manually_controlled(session, current) or not check_gateway():
                 return {'state': 'install_unconfirmed', 'attempt_id': attempt_id}
             if not begin_dispatch(session, device_id, attempt_id):
                 return {'state': 'waiting', 'attempt_id': attempt_id}
@@ -229,7 +230,7 @@ def onboard(domain, user_id, request_id, *, bridge_only=False):
             return {'state': 'waiting_for_idle', 'attempt_id': request_id}
         with session_scope() as session:
             current = _identity(session, domain, user_id)
-            if current.state != 'online' or current.controlling or not check_gateway():
+            if current.state != 'online' or manually_controlled(session, current) or not check_gateway():
                 observe(session, device_id, request_id, 'not_sent')
                 return {'state': 'waiting_for_idle', 'attempt_id': request_id}
             if not begin_dispatch(session, device_id, request_id):

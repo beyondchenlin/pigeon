@@ -19,6 +19,7 @@ from tornado.web import Application
 from executor.models import Device, DeviceJob, Group, Job, ModelResource, Task, User, UserDevice
 from server import bk_ai, bk_fleet
 from server.bk_ai_store import AiTask
+from server.bk_ai_store import ManualControl
 from server.bk_native_reload import NativeReload
 from server.bk_fleet_store import FleetDraft
 from server.service import PlatformJobHandler
@@ -28,7 +29,7 @@ class FleetFlowTests(AsyncHTTPTestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
         for table in (User.__table__, Device.__table__, Group.__table__, UserDevice.__table__,
-                      ModelResource.__table__, Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__, FleetDraft.__table__, NativeReload.__table__):
+                      ModelResource.__table__, Job.__table__, DeviceJob.__table__, Task.__table__, AiTask.__table__, FleetDraft.__table__, ManualControl.__table__, NativeReload.__table__):
             table.create(self.engine)
         factory = sessionmaker(self.engine, expire_on_commit=False)
         @contextmanager

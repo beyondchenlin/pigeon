@@ -15,6 +15,7 @@ import { apiRequest } from '@/lib/api';
 import { useHashPathname, useHashRouter } from '@/lib/hash-router';
 import { useDeviceTelemetry, bytes } from '@/lib/device-telemetry';
 import { useDeviceChannel } from '@/lib/device-channel';
+import { useManualControl } from '@/lib/manual-control';
 import { videoPreference, DEFAULT_VIDEO } from '@/lib/video-policy';
 
 const pathname = useHashPathname();
@@ -84,7 +85,23 @@ function escapeTools(e: KeyboardEvent) { if (e.key === 'Escape') controlsVisible
 
 const online = computed(() => record.value.state === 'online');
 const { data, stale, sampledTime, loading, refresh } = useDeviceTelemetry(id, online);
-const { status, info, displays, connected, stale: statusStale, sampled, logs, command, requestCommand, log } = useDeviceChannel(id, online);
+const { status, info, displays, connected, stale: statusStale, sampled, logs, requestCommand: rawCommand, reconnect, log } = useDeviceChannel(id, online);
+let pendingCommands = 0;
+let commandClaimed = false;
+const { held, acquire, activity } = useManualControl(id, online,
+  () => !!phone.value?.inputBusy() || textBusy.value || pendingCommands > 0,
+  () => {
+    phone.value?.endControl();
+    // A native keyboard/navigation claim belongs to its WebSocket until close.
+    if (commandClaimed) { commandClaimed = false; reconnect(); }
+  }, message => { actionNotice.value = message; });
+async function requestCommand(cmd: string, data: unknown) {
+  if (!await acquire()) throw new Error('本次手机操作未发送');
+  commandClaimed = true;
+  pendingCommands++;
+  try { return await rawCommand(cmd, data); }
+  finally { pendingCommands--; activity(); }
+}
 const tab = ref('evidence');
 const tabs = [
   { id: 'properties', label: '设备属性' },
@@ -186,7 +203,11 @@ async function copyId() {
   copyTimer = setTimeout(() => { copied.value = false; copyMessage.value = ''; }, 3000);
 }
 function selectTab(index: number) { const item = tabs[(index + tabs.length) % tabs.length]; if (item) { openTab(item.id); document.getElementById(`tab-${item.id}`)?.focus(); } }
-function send(cmd: string, payload: unknown) { phone.value?.interact(); if (command(cmd, payload)) log(cmd === 'device/wakeup' ? '已发送唤醒指令' : '已发送手机导航指令'); }
+async function send(cmd: string, payload: unknown) {
+  phone.value?.interact();
+  try { await requestCommand(cmd, payload); log(cmd === 'device/wakeup' ? '已发送唤醒指令' : '已发送手机导航指令'); }
+  catch { log('手机操作未确认'); }
+}
 onMounted(() => { document.addEventListener('keydown', escapeTools); document.addEventListener('fullscreenchange', fullscreenChanged); fullscreenChanged(); void load(); timer = setInterval(() => void load(), 15000); });
 onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); document.removeEventListener('fullscreenchange', fullscreenChanged); if (ownsFullscreen && document.fullscreenElement === document.documentElement) void document.exitFullscreen().catch(() => {}); disposed = true; controller?.abort(); clearInterval(timer); clearTimeout(copyTimer); });
 </script>
@@ -207,7 +228,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
       </header>
       <p v-if="recordError" role="alert" class="mx-4 mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{{ recordError }} <button class="underline" @click="load">重试</button></p>
       <div class="workbench-layout">
-        <PhoneControl ref="phone" class="workbench-phone" immersive :video-preference="videoSettings" :controls-visible="controlsVisible" :text-busy="textBusy" @compose="openComposer" @tools="showTools" :device-id="id" :online="online" :command-ready="connected" :request-command="requestCommand" :rotation="rotation" @command="send" @log="log" />
+        <PhoneControl ref="phone" class="workbench-phone" immersive :held="held" :acquire="acquire" :activity="activity" :video-preference="videoSettings" :controls-visible="controlsVisible" :text-busy="textBusy" @compose="openComposer" @tools="showTools" :device-id="id" :online="online" :command-ready="connected" :request-command="requestCommand" :rotation="rotation" @command="send" @log="log" />
         <component :is="mobile ? 'dialog' : 'section'" ref="detailsElement" class="workbench-details rounded-lg border border-border bg-background" aria-label="设备信息与工具">
           <div v-if="mobile" class="flex items-center justify-between border-b p-3"><strong class="text-sm">设备信息与工具</strong><button aria-label="关闭设备信息" class="p-2" @click="(detailsElement as HTMLDialogElement)?.close()"><X class="h-4 w-4" /></button></div>
           <div class="details-toolbar border-b border-border">
@@ -231,7 +252,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
             </div>
           </div>
           <div v-if="chatVisited" v-show="tab === 'ai'" id="panel-ai" class="details-scroll" role="tabpanel" aria-labelledby="tab-ai" tabindex="0">
-            <FleetChatPage :key="id" :workbench-device="id" :active="tab === 'ai'" @view-evidence="openTab('evidence', $event)" />
+            <FleetChatPage :key="id" :workbench-device="id" :manually-held="held" :active="tab === 'ai'" @view-evidence="openTab('evidence', $event)" />
           </div>
           <div v-if="tab !== 'ai'" :id="`panel-${tab}`" :key="tab" class="details-scroll" role="tabpanel" :aria-labelledby="`tab-${tab}`" tabindex="0">
             <div v-if="tab === 'properties'" class="properties-content">
@@ -293,7 +314,7 @@ onBeforeUnmount(() => { document.removeEventListener('keydown', escapeTools); do
           <p>自动档按网络调整；画面静止后补充清晰画面。当前请求 {{ phone?.videoProfile.short ?? 360 }} / {{ phone?.videoProfile.fps ?? 10 }} FPS。</p></fieldset>
           <MaintenanceSwitch v-if="toolsOpen" :key="id" :device-id="id" />
         </div>
-        <div class="tools-footer"><span>点击手机画面可直接操作；使用按钮进入纯画面或全屏。</span><span>{{ phone?.mode === 'webrtc' ? 'WebRTC' : '兼容传屏' }} · {{ phone?.fps ?? 0 }} FPS · 媒体 RTT {{ phone?.mediaRtt ?? '—' }} ms</span></div>
+        <div class="tools-footer"><span>点击手机画面可接管，结束操作 5 秒后自动交还。</span><span>{{ phone?.mode === 'webrtc' ? 'WebRTC' : '兼容传屏' }} · {{ phone?.fps ?? 0 }} FPS · 媒体 RTT {{ phone?.mediaRtt ?? '—' }} ms</span></div>
       </div>
     </DialogContent></Dialog>
     <Dialog v-model:open="switchOpen"><DialogContent><DialogHeader><DialogTitle>切换手机</DialogTitle></DialogHeader><input v-model="switchQuery" class="rounded border p-2 text-base" placeholder="搜索设备名称或 ID" aria-label="搜索要切换的设备" /><p v-if="switchError" role="alert">{{ switchError }} <button @click="showSwitch">重试</button></p><p v-if="switchingLoading">正在读取设备…</p><div class="max-h-[50dvh] space-y-1 overflow-auto"><button v-for="item in availableDevices.filter(d => `${d.domain} ${d.comment} ${d.model}`.toLowerCase().includes(switchQuery.toLowerCase()))" :key="item.domain" class="flex min-h-12 w-full items-center justify-between gap-3 rounded border px-3 py-2 text-left text-sm" :disabled="textBusy" @click="chooseDevice(item.domain)"><span class="truncate">{{ item.comment || item.model || item.domain }}</span><span class="shrink-0 text-xs text-muted-foreground">{{ item.state === 'online' ? '在线' : '离线' }}{{ item.domain === id ? ' · 当前' : '' }}</span></button></div></DialogContent></Dialog>

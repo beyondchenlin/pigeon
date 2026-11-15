@@ -18,7 +18,7 @@ export type VideoOptions = {
   mode: (mode: VideoMode) => void;
   log: (message: string) => void;
   stats?: (value: { rttMs: number | null; path: string; decoded: number; dropped: number }) => void;
-  inputChannel?: (channel: RTCDataChannel) => void;
+  inputChannel?: (channel: RTCDataChannel, reopen: () => void) => void;
   preference?: VideoPreference;
   displaySize?: () => { width: number; height: number };
   snapshot?: (short: number, signal: AbortSignal) => Promise<Blob>;
@@ -100,7 +100,15 @@ export function startRtcVideo(o: RtcOptions): Cancel {
     pc = new RTCPeerConnection({ iceServers });
     // Same authenticated peer and DTLS session as video. Phones without the
     // BK receiver never send capability/ready, so native WSS remains active.
-    if (o.inputChannel) o.inputChannel(pc.createDataChannel('bk-touch-v1', { ordered: true, protocol: 'bk.touch.v1' }));
+    let input: RTCDataChannel | undefined;
+    function openInput() {
+      if (closed || !pc || !o.inputChannel || (input && ['open','connecting'].includes(input.readyState))) return;
+      try {
+        input = pc.createDataChannel('bk-touch-v1', { ordered: true, protocol: 'bk.touch.v1' });
+        o.inputChannel(input, openInput);
+      } catch { /* Native touch remains available if SCTP cannot reopen. */ }
+    }
+    openInput();
     video = o.video ?? document.createElement('video'); video.autoplay = true; video.muted = true; video.playsInline = true;
     pc.ontrack = e => {
       if (closed || !video || e.track.kind !== 'video') return;

@@ -24,7 +24,7 @@ type Target = {domain:string; name:string; state:string};
 type TargetGroup = {id:number; name:string; count:number};
 type ChatMessage = {id:string; role:'user'|'assistant'; text:string; jobId?:number; selectedLabel?:string};
 
-const props = withDefaults(defineProps<{ workbenchDevice?: string; active?: boolean }>(), { active: true });
+const props = withDefaults(defineProps<{ workbenchDevice?: string; manuallyHeld?: boolean; active?: boolean }>(), { active: true });
 const emit = defineEmits<{ viewEvidence: [taskId: string] }>();
 const routePath = useHashPathname();
 const deviceId = ref(props.workbenchDevice || /^\/ai\/([a-z0-9]+)$/.exec(routePath.value)?.[1] || '');
@@ -125,12 +125,16 @@ const stateText: Record<string, string> = {bk_running:'等待执行', bk_finishe
 const activeStateText: Record<string, string> = {starting:'正在启动', submitting:'正在派发', queued:'等待执行', running:'执行中', paused:'已暂停',
   waiting_for_answer:'需要补充信息', waiting_on_phone:'需要在手机处理', unknown:'状态待核对', finishing:'手机收尾中', finish_overdue:'收尾超期，正在核对'};
 const reasonText: Record<string, string> = {device_offline:'手机离线，本次未执行', missed_schedule:'错过时间，本次未执行',
-  device_busy:'手机忙碌，本次未执行', access_revoked:'无设备权限', access_revoked_before_dispatch:'派发前设备权限已撤销',
+  manual_control:'人工接管中，本次任务未下发', device_busy:'手机忙碌，本次未执行', access_revoked:'无设备权限', access_revoked_before_dispatch:'派发前设备权限已撤销',
   device_offline_before_dispatch:'派发前手机离线', schedule_ambiguous_time:'当地时间发生夏令时变化，请重新安排',
   target_ambiguous:'有多个同名目标，请在原任务内容中写明具体设备编号或分组。',
   target_not_found:'没有找到该设备或分组，请在原任务内容中补充准确名称。', group_empty:'这个分组没有可用的授权设备。',
   schedule_invalid:'时间或时区不明确，请在原任务内容中补充。', execution_invalid:'浏览时长或预算不符合要求，请检查填写的执行约定。',
   device_binding_missing:'原计划中的设备绑定已变化，请重新安排。'};
+function manualSkip(job: Job) {
+  const targets = job.devices.filter(d => !deviceId.value || d.domain === deviceId.value);
+  return job.state === 'bk_done' && targets.length > 0 && targets.every(d => d.last_task?.reason === 'manual_control');
+}
 const showTime = (epoch: number | null | undefined) => epoch ? new Date(epoch * 1000).toLocaleString() : '—';
 const scheduleText = (s: Schedule) => {
   if (s.kind === 'now') return '立即执行';
@@ -209,6 +213,11 @@ async function prepare(selection?: {kind:'device'|'group'; name:string; label:st
 async function submit() {
   if (busy.value || (!plan.value && !pending.value)) return;
   const current = pending.value || {request_id:draftId.value, plan:plan.value!};
+  if (props.manuallyHeld && current.plan.schedule.kind === 'now' && !pending.value) {
+    error.value = '人工接管中，本次任务未下发。交还手机后可再次确认。';
+    addMessage('assistant', error.value);
+    return;
+  }
   if (!matchesDevice(current.plan)) { error.value = '原任务目标与当前设备不一致，不能在此提交。'; return; }
   pending.value = current;
   try { localStorage.setItem(pendingKey.value, JSON.stringify(current)); }
@@ -326,7 +335,7 @@ onBeforeUnmount(() => { mounted = false; if (refreshTimer) clearInterval(refresh
       </div>
       <div class="chat-columns grid min-h-0 flex-1" :class="{ 'lg:grid-cols-[minmax(0,1fr)_320px]': !workbenchDevice }">
         <section class="flex min-w-0 flex-col bg-white" :class="{ 'min-h-[calc(100dvh-120px)]': !workbenchDevice }" aria-label="任务对话">
-          <div v-if="deviceId" class="flex flex-wrap items-center gap-3 border-b border-[#e4ece7] bg-[#f3faf5] px-4 py-2 text-xs text-[#486255] sm:px-8" role="status"><span>{{ deviceConnection }}</span><button class="text-[#008b47] underline" @click="refreshDeviceConnection">刷新连接</button></div>
+          <div v-if="deviceId" class="flex flex-wrap items-center gap-3 border-b border-[#e4ece7] bg-[#f3faf5] px-4 py-2 text-xs text-[#486255] sm:px-8" role="status"><span>{{ manuallyHeld ? '人工接管中，当前不会下发手机任务' : deviceConnection }}</span><button class="text-[#008b47] underline" @click="refreshDeviceConnection">刷新连接</button></div>
           <div ref="conversationPane" class="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-6 sm:px-8 lg:max-h-[calc(100dvh-220px)]" aria-live="polite">
             <div v-if="!transcript.length" class="mx-auto mt-12 max-w-lg text-center">
               <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#e8f6ed] text-[#008b47]"><MessageSquare class="h-6 w-6" /></div>
@@ -341,11 +350,11 @@ onBeforeUnmount(() => { mounted = false; if (refreshTimer) clearInterval(refresh
                 <template v-if="entry.jobId">
                   <div v-if="deviceJobs.find(job => job.id === entry.jobId)" class="rounded-xl border border-[#dce8df] bg-white p-4 text-sm">
                     <template v-for="job in deviceJobs.filter(item => item.id === entry.jobId)" :key="job.id">
-                      <div class="flex items-center justify-between gap-2"><strong>{{ job.goal }}</strong><span class="rounded-full bg-[#e8f7ec] px-2 py-1 text-xs text-[#008b47]">{{ stateText[job.state] || job.state }}</span></div>
+                      <div class="flex items-center justify-between gap-2"><strong>{{ job.goal }}</strong><span class="rounded-full px-2 py-1 text-xs" :class="manualSkip(job) ? 'bg-amber-50 text-amber-800' : 'bg-[#e8f7ec] text-[#008b47]'">{{ manualSkip(job) ? '未下发' : stateText[job.state] || job.state }}</span></div>
                       <p class="mt-2 text-xs text-[#71857a]">{{ scheduleText(job.schedule) }} · 任务 #{{ job.id }}</p>
                       <p v-for="device in job.devices.filter(d => !workbenchDevice || d.domain === deviceId)" :key="device.domain || 'revoked'" class="mt-2 text-xs">{{ device.domain || '已撤销访问' }}：{{ device.active_task ? (device.active_task.cancel_requested ? '停止待确认' : (activeStateText[device.active_task.status] || '状态待核对')) : device.last_task ? (reasonText[device.last_task.reason || ''] || stateText[device.last_task.state] || device.last_task.state) : '等待执行' }}<span v-if="device.last_task?.answer"> · {{ device.last_task.answer }}</span><button v-if="workbenchDevice && device.active_task" class="ml-2 text-[#008b47] underline" @click="showReceipt(device.active_task.task_id)">查看并处理</button><a v-else-if="device.active_task && device.domain" class="ml-2 text-[#008b47] underline" :href="toHashHref('/ai/' + device.domain + '?task=' + device.active_task.task_id)">查看并处理</a></p>
                       <div class="mt-3 flex gap-4 text-xs"><button class="text-[#008b47]" @click="toggleRuns(job)">{{ expanded === job.id ? '收起执行记录' : '查看执行记录' }}</button><button v-if="['bk_running','bk_paused'].includes(job.state)" :disabled="busy" class="text-[#697d70]" @click="cancel(job, false)">{{ workbenchDevice && job.devices.length > 1 ? '停止整项计划的后续安排' : '停止后续' }}</button><button v-if="hasActive(job)" :disabled="busy" class="text-red-700" @click="cancel(job, true)">{{ workbenchDevice && job.devices.length > 1 ? '停止整项计划的当前执行' : '停止当前任务' }}</button></div>
-                      <ul v-if="expanded === job.id" class="mt-3 space-y-1 border-t pt-2 text-xs text-[#71857a]"><li v-for="run in runs.filter(r => !workbenchDevice || r.device === deviceId)" :key="run.task_id">{{ showTime(run.scheduled_at) }} · {{ run.device }} · {{ reasonText[run.reason || ''] || stateText[run.state] || run.state }}<span v-if="run.answer">：{{ run.answer }}</span><button v-if="workbenchDevice && run.task_id" class="ml-2 text-[#008b47] underline" @click="emit('viewEvidence', run.task_id)">查看本次证据</button></li></ul>
+                      <ul v-if="expanded === job.id" class="mt-3 space-y-1 border-t pt-2 text-xs text-[#71857a]"><li v-for="run in runs.filter(r => !workbenchDevice || r.device === deviceId)" :key="run.task_id">{{ showTime(run.scheduled_at) }} · {{ run.device }} · {{ reasonText[run.reason || ''] || stateText[run.state] || run.state }}<span v-if="run.answer">：{{ run.answer }}</span><button v-if="workbenchDevice && run.task_id && !['manual_control','device_busy','device_offline','access_revoked','missed_schedule'].includes(run.reason || '')" class="ml-2 text-[#008b47] underline" @click="emit('viewEvidence', run.task_id)">查看本次证据</button></li></ul>
                     </template>
                   </div><p v-else class="text-xs text-[#72847a]">任务 #{{ entry.jobId }} 的状态暂未取得，请在右侧任务记录查看。</p>
                 </template>
@@ -365,7 +374,7 @@ onBeforeUnmount(() => { mounted = false; if (refreshTimer) clearInterval(refresh
           </div>
           <form class="border-t border-[#e4ece7] bg-white p-4 sm:px-8" @submit.prevent="prepare()"><div class="flex items-end gap-2 rounded-xl border border-[#d6e3da] bg-white p-2 shadow-sm"><textarea v-model="message" :disabled="!!pending || busy" rows="2" maxlength="4000" class="min-h-[46px] min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none" :placeholder="deviceId ? '输入这台手机的任务，例如：明天上午 9 点检查状态…' : '输入消息，例如：明天上午 9 点让一组手机检查状态…'" @keydown.enter.exact.prevent="prepare()" /><button type="submit" :disabled="busy || !!pending || !modelId || !message.trim() || !!contractError" class="flex items-center gap-1.5 rounded-lg bg-[#00964c] px-4 py-2.5 text-sm font-medium text-white disabled:opacity-40"><Send class="h-4 w-4" />发送</button></div><p v-if="!supportedModels.length" class="mt-2 text-xs text-amber-700">请先在模型管理中配置服务器模型。</p><p v-else-if="!modelId" class="mt-2 text-xs text-amber-700">请先在“任务设置”里选择理解任务的模型。</p><p v-else-if="contractError" class="mt-2 text-xs text-amber-700">请在“任务设置”里补全浏览时长和预算。</p><p v-else class="mt-2 text-xs text-[#a0aea5]">对话保存在当前浏览器；任务记录保存在服务器。</p></form>
         </section>
-        <aside class="border-t border-[#e4ece7] bg-[#fbfdfb] px-5 py-5 lg:border-l lg:border-t-0" aria-label="任务记录"><div class="flex items-center justify-between"><h2 class="flex items-center gap-2 font-semibold"><ClipboardList class="h-4 w-4" />任务记录</h2><button class="text-[#008b47]" aria-label="刷新任务记录" @click="refresh(); refreshReceipts()"><RefreshCw class="h-4 w-4" /></button></div><p v-if="targetJobError" class="mt-4 text-xs text-amber-700">{{ targetJobError }}</p><p v-if="!deviceJobs.length && !deviceReceipts.length" class="mt-5 text-sm text-[#91a098]">安排任务后，记录会显示在这里。</p><p v-if="deviceReceiptError" role="alert" class="mt-3 text-xs text-amber-700">{{ deviceReceiptError }}</p><p v-if="deviceId && deviceJobs.length" class="mt-4 text-xs text-[#72847a]">智能任务安排</p><button v-for="job in deviceJobs" :key="job.id" class="mt-3 w-full rounded-lg border border-[#e4eee7] bg-white p-3 text-left hover:border-[#a9d6b8]" @click="addMessage('assistant', '这是任务的当前状态。', job.id)"><div class="flex items-start justify-between gap-2"><span class="truncate text-sm font-medium">{{ job.goal }}</span><span class="shrink-0 text-xs text-[#008b47]">{{ stateText[job.state] || job.state }}</span></div><p class="mt-2 text-xs text-[#8a9b90]">{{ scheduleText(job.schedule) }} · #{{ job.id }}</p><p v-if="String(job.id) === targetJob" class="mt-1 text-xs text-[#008b47]">从任务列表打开的任务 #{{ job.id }}</p></button><p v-if="deviceId && deviceReceipts.length" class="mt-5 text-xs text-[#72847a]">本机任务记录</p><button v-for="item in deviceReceipts" :key="item.task_id" class="mt-3 w-full rounded-lg border border-[#e4eee7] bg-white p-3 text-left hover:border-[#a9d6b8]" @click="showReceipt(item.task_id)"><span class="block truncate text-sm font-medium">{{ item.goal }}</span><span class="mt-2 block text-xs text-[#008b47]">{{ item.cancel_requested && !['done','failed','cancelled','rejected'].includes(item.status) ? '停止待确认' : receiptLabels[item.status] || item.status }}</span></button></aside>
+        <aside class="border-t border-[#e4ece7] bg-[#fbfdfb] px-5 py-5 lg:border-l lg:border-t-0" aria-label="任务记录"><div class="flex items-center justify-between"><h2 class="flex items-center gap-2 font-semibold"><ClipboardList class="h-4 w-4" />任务记录</h2><button class="text-[#008b47]" aria-label="刷新任务记录" @click="refresh(); refreshReceipts()"><RefreshCw class="h-4 w-4" /></button></div><p v-if="targetJobError" class="mt-4 text-xs text-amber-700">{{ targetJobError }}</p><p v-if="!deviceJobs.length && !deviceReceipts.length" class="mt-5 text-sm text-[#91a098]">安排任务后，记录会显示在这里。</p><p v-if="deviceReceiptError" role="alert" class="mt-3 text-xs text-amber-700">{{ deviceReceiptError }}</p><p v-if="deviceId && deviceJobs.length" class="mt-4 text-xs text-[#72847a]">智能任务安排</p><button v-for="job in deviceJobs" :key="job.id" class="mt-3 w-full rounded-lg border border-[#e4eee7] bg-white p-3 text-left hover:border-[#a9d6b8]" @click="addMessage('assistant', '这是任务的当前状态。', job.id)"><div class="flex items-start justify-between gap-2"><span class="truncate text-sm font-medium">{{ job.goal }}</span><span class="shrink-0 text-xs" :class="manualSkip(job) ? 'text-amber-800' : 'text-[#008b47]'">{{ manualSkip(job) ? '未下发' : stateText[job.state] || job.state }}</span></div><p class="mt-2 text-xs text-[#8a9b90]">{{ scheduleText(job.schedule) }} · #{{ job.id }}</p><p v-if="String(job.id) === targetJob" class="mt-1 text-xs text-[#008b47]">从任务列表打开的任务 #{{ job.id }}</p></button><p v-if="deviceId && deviceReceipts.length" class="mt-5 text-xs text-[#72847a]">本机任务记录</p><button v-for="item in deviceReceipts" :key="item.task_id" class="mt-3 w-full rounded-lg border border-[#e4eee7] bg-white p-3 text-left hover:border-[#a9d6b8]" @click="showReceipt(item.task_id)"><span class="block truncate text-sm font-medium">{{ item.goal }}</span><span class="mt-2 block text-xs text-[#008b47]">{{ item.cancel_requested && !['done','failed','cancelled','rejected'].includes(item.status) ? '停止待确认' : receiptLabels[item.status] || item.status }}</span></button></aside>
       </div>
     </main>
     <section v-if="workbenchDevice && receiptOpen" class="min-w-0 flex-1 overflow-auto bg-white p-4" aria-label="本机任务详情">

@@ -13,13 +13,14 @@ from sqlalchemy.orm import sessionmaker
 from executor.handlers import event
 from executor.models import Device, DeviceJob, Job, Script, ScriptVersion, Task
 from server import bk_ai_store
+from server.bk_ai_store import ManualControl
 from server.bk_native_reload import NativeReload
 
 
 class CompiledDeadlineGuardTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://')
-        for table in (Device.__table__, Script.__table__, ScriptVersion.__table__, Job.__table__, DeviceJob.__table__, Task.__table__, NativeReload.__table__):
+        for table in (Device.__table__, Script.__table__, ScriptVersion.__table__, Job.__table__, DeviceJob.__table__, Task.__table__, ManualControl.__table__, NativeReload.__table__):
             table.create(self.engine)
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         self.orig = event.cb_task_status_prepared_imp

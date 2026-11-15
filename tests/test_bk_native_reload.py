@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from executor.models import Device, Task, User, UserDevice
 from server.bk_ai_store import AiTask, reload_busy
+from server.bk_ai_store import ManualControl
 from server.bk_native_reload import NativeReload, reserve, begin_dispatch, observe
 from server.bk_native_gateway import NativeGatewayConnection, register, unregister, remove_dead_worker_connections
 
@@ -18,7 +19,7 @@ class ReloadReceiptTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://')
         for table in (User.__table__, Device.__table__, UserDevice.__table__, Task.__table__,
-                      AiTask.__table__, NativeGatewayConnection.__table__, NativeReload.__table__):
+                      AiTask.__table__, NativeGatewayConnection.__table__, ManualControl.__table__, NativeReload.__table__):
             table.create(self.engine)
         self.Session = sessionmaker(self.engine, expire_on_commit=False)
         with self.Session.begin() as s:

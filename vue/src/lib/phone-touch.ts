@@ -141,6 +141,13 @@ export function createPhoneTouch(o: Options) {
       if (capability && dc?.readyState === 'open') claim();
       else connectWs();
     },
+    deactivate() {
+      if (!enabled || disposed) return;
+      if (gesture !== 'none') send({ action: 'up', id: 0 });
+      enabled = false;
+      clearTimeout(retry); clearTimeout(handshake); clearTimeout(claimTimer);
+      stopWs(); stopDc(); state('none'); loseGesture();
+    },
     get bufferedAmount() { return route === 'p2p' ? dc?.bufferedAmount ?? 0 : ws?.bufferedAmount ?? 0; },
     recover() { if (enabled && route === 'none' && !claiming && !dc) { clearTimeout(retry); connectWs(); } },
     close() {

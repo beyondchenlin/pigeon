@@ -14,12 +14,13 @@ from sqlalchemy.pool import StaticPool
 from executor.models import Device, UserDevice
 from server import bk_ai as api
 from server.bk_ai_store import AiTask
+from server.bk_ai_store import ManualControl
 from server.bk_native_reload import NativeReload
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread':False})
-        for table in (Device.__table__, UserDevice.__table__, AiTask.__table__, NativeReload.__table__): table.create(self.engine)
+        for table in (Device.__table__, UserDevice.__table__, AiTask.__table__, ManualControl.__table__, NativeReload.__table__): table.create(self.engine)
         factory = sessionmaker(self.engine, expire_on_commit=False)
         @contextmanager
         def sessions():

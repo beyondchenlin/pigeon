@@ -24,6 +24,7 @@ from tornado.websocket import WebSocketHandler, websocket_connect
 from executor.models import Device, Task, User, UserDevice
 from server.bk_ai_store import AiTask
 from server.bk_native_gateway import NativeGatewayConnection
+from server.bk_ai_store import ManualControl
 from server.bk_native_reload import NativeReload, reserve, observe
 from server import bk_native_gateway_api as gateway
 
@@ -40,7 +41,7 @@ class GatewayNginxTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_websocket_excludes_reload_and_failed_close_stays_blocked(self):
         engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread':False})
         for table in (User.__table__, Device.__table__, UserDevice.__table__, Task.__table__,
-                      AiTask.__table__, NativeGatewayConnection.__table__, NativeReload.__table__):
+                      AiTask.__table__, NativeGatewayConnection.__table__, ManualControl.__table__, NativeReload.__table__):
             table.create(engine)
         factory = sessionmaker(engine, expire_on_commit=False)
         @contextmanager

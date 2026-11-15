@@ -19,6 +19,7 @@ from tornado.web import Application
 from executor.models import Device, Task, User, UserDevice
 from server.bk_ai_store import AiTask
 from server.bk_native_gateway import NativeGatewayConnection
+from server.bk_ai_store import ManualControl
 from server.bk_native_reload import NativeReload, reserve
 from server import bk_native_gateway_api as gateway
 
@@ -34,7 +35,7 @@ class GatewayApiTests(AsyncHTTPTestCase):
         self.env.start(); self.addCleanup(self.env.stop)
         self.engine = create_engine('sqlite://', poolclass=StaticPool, connect_args={'check_same_thread': False})
         for table in (User.__table__, Device.__table__, UserDevice.__table__, Task.__table__,
-                      AiTask.__table__, NativeGatewayConnection.__table__, NativeReload.__table__):
+                      AiTask.__table__, NativeGatewayConnection.__table__, ManualControl.__table__, NativeReload.__table__):
             table.create(self.engine)
         self.addCleanup(self.engine.dispose)
         sessions = sessionmaker(self.engine, expire_on_commit=False)

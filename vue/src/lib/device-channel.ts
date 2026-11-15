@@ -19,6 +19,7 @@ export function useDeviceChannel(id: Ref<string>, online: Ref<boolean>) {
   let retry: ReturnType<typeof setTimeout> | undefined;
   let poll: ReturnType<typeof setInterval> | undefined;
   let attempts = 0;
+  let disposed = false;
   let handshake: ReturnType<typeof setTimeout> | undefined;
   const pending = new Map<string, { resolve: (data: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const enabled = computed(() => online.value && visible.value);
@@ -54,7 +55,7 @@ export function useDeviceChannel(id: Ref<string>, online: Ref<boolean>) {
   }
   function connect() {
     stop();
-    if (!enabled.value) return;
+    if (disposed || !enabled.value) return;
     log('正在连接手机状态通道');
     try {
       const ws = new WebSocket(deviceSocket(id.value, '/ws/command'));
@@ -87,6 +88,6 @@ export function useDeviceChannel(id: Ref<string>, online: Ref<boolean>) {
   function visibility() { visible.value = !document.hidden; }
   watch(enabled, connect);
   onMounted(() => { document.addEventListener('visibilitychange', visibility); connect(); });
-  onBeforeUnmount(() => { stop(); document.removeEventListener('visibilitychange', visibility); });
-  return { status, info, displays, connected, stale, sampled, logs, command, requestCommand, log };
+  onBeforeUnmount(() => { disposed = true; stop(); document.removeEventListener('visibilitychange', visibility); });
+  return { status, info, displays, connected, stale, sampled, logs, command, requestCommand, reconnect: connect, log };
 }
